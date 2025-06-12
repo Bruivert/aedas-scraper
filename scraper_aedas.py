@@ -1,3 +1,4 @@
+
 from requests_html import HTMLSession
 from urllib.parse import urljoin
 import csv, json, time, os, requests, textwrap
@@ -14,6 +15,9 @@ HEADERS = {
     )
 }
 
+ZONAS_OBJETIVO = ["Valencia", "Quart de Poblet", "Mislata", "Paterna", "Manises", "Torrent"]
+PRECIO_MAXIMO = 270000
+
 def fetch_page(session: HTMLSession, url: str):
     r = session.get(url, headers=HEADERS, timeout=30)
     r.html.render(timeout=30, sleep=1)
@@ -21,7 +25,6 @@ def fetch_page(session: HTMLSession, url: str):
 
 def extract_cards(page) -> List[Dict[str, str]]:
     cards = []
-    # Modern selector
     for link in page.html.find('a[data-automation="development-card-link"]'):
         cards.append({
             "title": link.find("h3, h4", first=True).text,
@@ -29,7 +32,6 @@ def extract_cards(page) -> List[Dict[str, str]]:
             "location": link.find('[data-automation="development-card-city"]', first=True).text,
             "price_from": link.find('[data-automation="development-card-price-from"]', first=True).text,
         })
-    # Fallback legacy
     if not cards:
         for a in page.html.find('a.card-promo, a.card-promo.card'):
             img = a.find("img", first=True)
@@ -43,7 +45,7 @@ def extract_cards(page) -> List[Dict[str, str]]:
 
 def scrape_all(offset_step: int = 30) -> List[Dict[str, str]]:
     session = HTMLSession()
-    master: List[Dict[str, str]] = []
+    master = []
 
     first = fetch_page(session, LIST_URL)
     master.extend(extract_cards(first))
@@ -55,20 +57,32 @@ def scrape_all(offset_step: int = 30) -> List[Dict[str, str]]:
         if res.status_code != 200 or not res.json().get("items"):
             break
         for item in res.json()["items"]:
-            master.append(
-                {
-                    "title": item["title"],
-                    "url": urljoin(BASE, item["seoUrl"]),
-                    "location": item["city"]["name"],
-                    "price_from": item.get("priceFrom", "—"),
-                }
-            )
+            master.append({
+                "title": item["title"],
+                "url": urljoin(BASE, item["seoUrl"]),
+                "location": item["city"]["name"],
+                "price_from": item.get("priceFrom", "—"),
+            })
         offset += offset_step
-        time.sleep(0.4)  # Be polite with server
+        time.sleep(0.4)
     session.close()
     return master
 
-def save_csv(rows: List[Dict[str, str]], path="promociones_aedas.csv"):
+def filtrar_promociones(rows: List[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
+    activas, futuras = [], []
+    for row in rows:
+        zona_ok = any(z.lower() in row["location"].lower() for z in ZONAS_OBJETIVO)
+        if not zona_ok:
+            continue
+        precio = row.get("price_from", "—").replace(".", "").replace("€", "").replace("Desde", "").strip()
+        if precio.isdigit():
+            if int(precio) <= PRECIO_MAXIMO:
+                activas.append(row)
+        else:
+            futuras.append(row)
+    return {"activas": activas, "futuras": futuras}
+
+def save_csv(rows: List[Dict[str, str]], path="output.csv"):
     if not rows:
         return
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -84,7 +98,7 @@ def notify_telegram(file_path: str, total: int):
         return
     msg = textwrap.dedent(f"""
     🏘️  Scraping AEDAS terminado.
-    • Promociones extraídas: {total}
+    • Promociones extraídas (filtradas): {total}
     • Archivo CSV: {file_path}
     """).strip()
     resp = requests.post(
@@ -97,12 +111,20 @@ def notify_telegram(file_path: str, total: int):
 
 def main():
     data = scrape_all()
-    csv_path = "promociones_aedas.csv"
-    save_csv(data, csv_path)
-    with open("promociones_aedas.json", "w", encoding="utf-8") as fp:
-        json.dump(data, fp, ensure_ascii=False, indent=2)
-    notify_telegram(csv_path, len(data))
-    print(f"Extraídas {len(data)} promociones.")
+    filtradas = filtrar_promociones(data)
+
+    save_csv(filtradas["activas"], "promociones_aedas_activas.csv")
+    save_csv(filtradas["futuras"], "promociones_aedas_futuras.csv")
+
+    with open("promociones_aedas_activas.json", "w", encoding="utf-8") as f:
+        json.dump(filtradas["activas"], f, ensure_ascii=False, indent=2)
+    with open("promociones_aedas_futuras.json", "w", encoding="utf-8") as f:
+        json.dump(filtradas["futuras"], f, ensure_ascii=False, indent=2)
+
+    total = len(filtradas["activas"]) + len(filtradas["futuras"])
+    notify_telegram("promociones_aedas_activas.csv", total)
+    print(f"Promociones activas: {len(filtradas['activas'])}")
+    print(f"Promociones futuras: {len(filtradas['futuras'])}")
 
 if __name__ == "__main__":
     main()
