@@ -4,7 +4,7 @@ import sys
 import re
 from bs4 import BeautifulSoup
 
-# --- TUS FILTROS (Puedes cambiarlos aquí) ---
+# --- TUS FILTROS (Se aplicarán a TODAS las búsquedas) ---
 LOCALIZACIONES_DESEADAS = ["mislata", "valencia", "quart de poblet", "paterna", "manises"]
 PRECIO_MAXIMO = 270000
 HABITACIONES_MINIMAS = 2
@@ -16,7 +16,7 @@ def enviar_mensaje_telegram(texto):
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         print("Error: Secrets de Telegram no encontrados.", flush=True)
-        sys.exit(1)
+        return
     if len(texto) > 4096:
         texto = texto[:4000] + "\n\n[Mensaje truncado...]"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -27,7 +27,6 @@ def enviar_mensaje_telegram(texto):
         print("Mensaje enviado a Telegram.", flush=True)
     except requests.exceptions.RequestException as e:
         print(f"Error CRÍTICO al enviar a Telegram: {e}", flush=True)
-        sys.exit(1)
 
 def limpiar_y_convertir_a_numero(texto):
     if not texto: return None
@@ -38,75 +37,107 @@ def limpiar_y_convertir_a_numero(texto):
     except (ValueError, TypeError):
         return None
 
-# --- Función principal (LÓGICA CORREGIDA) ---
+# --- SCRAPER PARA AEDAS ---
 
-def main():
-    URL_BASE = "https://www.aedashomes.com"
-    URL_PROMOCIONES = f"{URL_BASE}/viviendas-obra-nueva?province=2509951"
-    HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    
+def scrape_aedas(headers):
+    print("\n--- Iniciando scraper de AEDAS ---", flush=True)
+    resultados_aedas = []
     try:
-        print(f"PASO 1: Obteniendo promociones desde la página de Valencia: {URL_PROMOCIONES}", flush=True)
-        response = requests.get(URL_PROMOCIONES, headers=HEADERS, timeout=30)
+        url_aedas = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
+        response = requests.get(url_aedas, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        tarjetas_promociones = soup.select('a.card-promo.card')
-        if not tarjetas_promociones:
-            enviar_mensaje_telegram("❌ No se encontraron tarjetas de promociones en la página. El selector 'a.card-promo.card' podría haber cambiado.")
-            return
 
-        print(f"Se encontraron {len(tarjetas_promociones)} promociones. Extrayendo datos y filtrando...", flush=True)
-        promociones_filtradas = []
+        tarjetas = soup.select('a.card-promo.card')
+        print(f"AEDAS: Se encontraron {len(tarjetas)} promociones en la página de Valencia.", flush=True)
 
-        for tarjeta in tarjetas_promociones:
-            nombre_tag = tarjeta.find('span', class_='promo-title')
-            nombre = nombre_tag.get_text(strip=True) if nombre_tag else None
-
-            precio_tag = tarjeta.find('span', class_='promo-price')
-            precio_texto = precio_tag.get_text(strip=True) if precio_tag else None
-            
+        for tarjeta in tarjetas:
+            nombre = tarjeta.find('span', class_='promo-title').get_text(strip=True)
+            precio_texto = tarjeta.find('span', class_='promo-price').get_text(strip=True)
             detalles_lista = tarjeta.select('ul.promo-description li')
+            ubicacion = detalles_lista[0].get_text(strip=True).lower()
+            habitaciones_texto = detalles_lista[1].get_text(strip=True)
             
-            # --- ¡AQUÍ ESTABA EL ERROR! AÑADIMOS EL PARÉNTESIS DE CIERRE ---
-            ubicacion_texto = detalles_lista[0].get_text(strip=True) if len(detalles_lista) > 0 else None
-            habitaciones_texto = detalles_lista[1].get_text(strip=True) if len(detalles_lista) > 1 else None
-            
-            url = URL_BASE + tarjeta.get('href', '')
-
             precio = limpiar_y_convertir_a_numero(precio_texto)
             habitaciones = limpiar_y_convertir_a_numero(habitaciones_texto)
-            ubicacion = ubicacion_texto.lower() if ubicacion_texto else ''
-
-            print(f"  -> Analizando: {nombre} | {ubicacion} | {habitaciones} hab. | {precio}€", flush=True)
 
             if all([nombre, ubicacion, precio, habitaciones]):
-                ubicacion_ok = any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS)
-                precio_ok = precio <= PRECIO_MAXIMO
-                habitaciones_ok = habitaciones >= HABITACIONES_MINIMAS
+                if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
+                    print(f"  -> MATCH en AEDAS: {nombre}", flush=True)
+                    url_promo = "https://www.aedashomes.com" + tarjeta.get('href', '')
+                    resultados_aedas.append(f"\n*{nombre} (AEDAS)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",","."))
+    except Exception as e:
+        print(f"  -> ERROR en el scraper de AEDAS: {e}", flush=True)
+        resultados_aedas.append("\n❌ No se pudo completar la búsqueda en AEDAS por un error.")
+    
+    return resultados_aedas
 
-                if ubicacion_ok and precio_ok and habitaciones_ok:
-                    print(f"    ¡¡¡MATCH ENCONTRADO!!! {nombre}", flush=True)
-                    promociones_filtradas.append({'nombre': nombre, 'ubicacion': ubicacion, 'precio': precio, 'habitaciones': habitaciones, 'url': url})
-        
-        print("\nPASO FINAL: Generando reporte.", flush=True)
-        if not promociones_filtradas:
-            mensaje_final = f"✅ Scraper de AEDAS finalizado.\n\nNo se ha encontrado ninguna promoción que cumpla tus filtros actuales en la página de Valencia:\n- Ubicación: `{', '.join(LOCALIZACIONES_DESEADAS)}`\n- Precio Máx: `{PRECIO_MAXIMO:,}€`\n- Hab. Mín: `{HABITACIONES_MINIMAS}`".replace(",",".")
-        else:
-            mensaje_final = f"📢 ¡Se han encontrado {len(promociones_filtradas)} promociones que cumplen tus filtros!\n"
-            for promo in promociones_filtradas:
-                mensaje_final += f"\n*{promo['nombre']}*\n"
-                mensaje_final += f"📍 {promo['ubicacion'].title()}\n"
-                mensaje_final += f"💶 Desde: {promo['precio']:,}€\n".replace(",",".")
-                mensaje_final += f"🛏️ Dorms: {promo['habitaciones']}\n"
-                mensaje_final += f"🔗 [Ver promoción]({promo['url']})\n"
-        
-        enviar_mensaje_telegram(mensaje_final)
+# --- SCRAPER PARA VÍA CÉLERE ---
+
+def scrape_viacelere(headers):
+    print("\n--- Iniciando scraper de VÍA CÉLERE ---", flush=True)
+    resultados_celere = []
+    try:
+        url_celere = "https://www.viacelere.com/promociones?provincia_id=46"
+        response = requests.get(url_celere, headers=headers, timeout=30)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        tarjetas = soup.select('article.card-promotion')
+        print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones en la página de Valencia.", flush=True)
+
+        for tarjeta in tarjetas:
+            nombre = tarjeta.find('h2', class_='card-promotion__title').get_text(strip=True)
+            ubicacion = tarjeta.find('p', class_='card-promotion__location').get_text(strip=True).lower()
+            precio_texto = tarjeta.find('p', class_='card-promotion__price').get_text(strip=True)
+            
+            # Las habitaciones no están en la tarjeta, hay que visitar el enlace
+            url_promo = tarjeta.find('a')['href']
+            
+            precio = limpiar_y_convertir_a_numero(precio_texto)
+
+            if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS) and precio and precio <= PRECIO_MAXIMO:
+                # Solo visitamos la página si cumple el filtro de ubicación y precio
+                print(f"  -> VÍA CÉLERE: Visitando '{nombre}' para buscar habitaciones...", flush=True)
+                promo_response = requests.get(url_promo, headers=headers, timeout=20)
+                promo_soup = BeautifulSoup(promo_response.text, 'html.parser')
+                
+                habitaciones = None
+                features = promo_soup.select('ul.features li')
+                for feature in features:
+                    if 'dormitorio' in feature.get_text(strip=True).lower():
+                        habitaciones = limpiar_y_convertir_a_numero(feature.get_text(strip=True))
+                        break
+
+                if habitaciones and habitaciones >= HABITACIONES_MINIMAS:
+                    print(f"    -> MATCH en VÍA CÉLERE: {nombre}", flush=True)
+                    resultados_celere.append(f"\n*{nombre} (Vía Célere)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",","."))
 
     except Exception as e:
-        error_msg = f"❌ Error inesperado en el scraper: {e}"
-        print(error_msg, flush=True)
-        enviar_mensaje_telegram(error_msg)
+        print(f"  -> ERROR en el scraper de VÍA CÉLERE: {e}", flush=True)
+        resultados_celere.append("\n❌ No se pudo completar la búsqueda en Vía Célere por un error.")
+        
+    return resultados_celere
+
+# --- Función Principal ---
+
+def main():
+    HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    
+    todos_los_resultados = []
+    
+    # Ejecutamos cada scraper y recogemos sus resultados
+    todos_los_resultados.extend(scrape_aedas(HEADERS))
+    todos_los_resultados.extend(scrape_viacelere(HEADERS))
+    
+    # Generamos el reporte final
+    if not todos_los_resultados:
+        mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros en AEDAS o Vía Célere."
+    else:
+        mensaje_final = f"📢 ¡Se han encontrado {len(todos_los_resultados)} promociones que cumplen tus filtros!\n"
+        mensaje_final += "".join(todos_los_resultados)
+        
+    enviar_mensaje_telegram(mensaje_final)
 
 if __name__ == "__main__":
     main()
