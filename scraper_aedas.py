@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from unidecode import unidecode
 
 BASE_URL = "https://www.aedashomes.com"
-START_URL = "https://www.aedashomes.com/viviendas-en-venta/valencia/valencia"
+START_URL = "https://www.aedashomes.com/viviendas-obra-nueva-valencia"
 
 ALLOWED_CITIES = {
     "valencia", "quart de poblet", "manises", "paterna", "mislata",
