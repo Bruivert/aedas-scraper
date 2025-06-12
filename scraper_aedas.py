@@ -1,93 +1,123 @@
-from requests_html import HTMLSession
+
+# scraper_aedas.py
+"""Scraper simple para AEDAS Homes.
+
+Filtra promociones por ciudad, habitaciones y precio,
+envía avisos a Telegram y evita duplicados con SQLite.
+"""
+
+import os
+import re
+import sqlite3
+import sys
 from urllib.parse import urljoin
-import csv, json, time, os, requests, textwrap
-from typing import List, Dict
 
-BASE = "https://www.aedashomes.com"
-LIST_URL = f"{BASE}/viviendas-obra-nueva"
+import requests
+from bs4 import BeautifulSoup
+from unidecode import unidecode
 
-CITY_MAP = {
-    "2599951": "Quart de Poblet",
-    "2599943": "Valencia",
-    "2599950": "Mislata",
-    "2599953": "Paterna",
-    "2599956": "Torrent",
-    "2599945": "Manises",
+BASE_URL = "https://www.aedashomes.com"
+START_URL = "https://www.aedashomes.com/viviendas-en-venta/valencia/valencia"
+
+ALLOWED_CITIES = {
+    "valencia", "quart de poblet", "manises", "paterna", "mislata",
 }
+MIN_ROOMS = 2
+MAX_PRICE = 270_000  # € 270 000
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    )
-}
+DB_PATH = "seen.db"
 
-def fetch_page(session: HTMLSession, url: str):
-    r = session.get(url, headers=HEADERS, timeout=30)
-    r.html.render(timeout=30, sleep=1)
-    return r
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-def extract_cards(page) -> List[Dict[str, str]]:
-    cards = []
-    for a in page.html.find('a.card-promo.card'):
-        title = a.attrs.get("title", "").replace("Ir a promoción", "").strip()
-        href = a.attrs.get("href", "")
-        url = urljoin(BASE, href)
-        city_id = ""
-        if "city=" in href:
-            city_id = href.split("city=")[-1].split("&")[0].strip()
-        location = CITY_MAP.get(city_id, "Desconocido")
-        cards.append({
-            "title": title,
-            "url": url,
-            "location": location,
-            "price_from": "—",
-        })
-    return cards
-
-def scrape_all() -> List[Dict[str, str]]:
-    session = HTMLSession()
-    first = fetch_page(session, LIST_URL)
-    cards = extract_cards(first)
-    session.close()
-    return cards
-
-def save_csv(rows: List[Dict[str, str]], path="promociones_aedas.csv"):
-    if not rows:
+def notify_telegram(promo: dict) -> None:
+    """Envía mensaje a Telegram."""
+    if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
+        print("✘ TELEGRAM_TOKEN o TELEGRAM_CHAT_ID no configurados", file=sys.stderr)
         return
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=rows[0].keys())
-        w.writeheader()
-        w.writerows(rows)
-
-def notify_telegram(file_path: str, total: int):
-    token = os.environ.get("TG_BOT_TOKEN")
-    chat_id = os.environ.get("TG_CHAT_ID")
-    if not token or not chat_id:
-        print("Telegram env vars not set; skipping notification.")
-        return
-    msg = textwrap.dedent(f"""
-    🏘️  Scraping AEDAS terminado.
-    • Promociones extraídas: {total}
-    • Archivo CSV: {file_path}
-    """).strip()
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data={"chat_id": chat_id, "text": msg},
-        timeout=30,
+    text = (
+        f"🏡 <b>{promo['title']}</b>\n"
+        f"Ciudad: {promo['city'].title()}\n"
+        f"Habitaciones: {promo['rooms']}\n"
+        f"Precio: {promo['price']:,} €\n"
+        f"{promo['href']}"
     )
-    resp.raise_for_status()
-    print("Telegram notification sent.")
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        requests.post(
+            url,
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=20,
+        ).raise_for_status()
+        print(f"✓ Enviado a Telegram: {promo['title']}")
+    except Exception as exc:
+        print(f"✘ Error enviando Telegram: {exc}", file=sys.stderr)
 
-def main():
-    data = scrape_all()
-    csv_path = "promociones_aedas.csv"
-    save_csv(data, csv_path)
-    with open("promociones_aedas.json", "w", encoding="utf-8") as fp:
-        json.dump(data, fp, ensure_ascii=False, indent=2)
-    notify_telegram(csv_path, len(data))
-    print(f"Extraídas {len(data)} promociones.")
+def seen_before(db: sqlite3.Connection, href: str) -> bool:
+    """True si ya estaba en la BD; False si es nuevo y se inserta."""
+    try:
+        db.execute("INSERT INTO promos(href) VALUES (?)", (href,))
+        db.commit()
+        return False
+    except sqlite3.IntegrityError:
+        return True
+
+def scrape() -> list:
+    """Scrapea la página y devuelve lista de promos (dict)."""
+    res = requests.get(START_URL, timeout=30)
+    res.raise_for_status()
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    promos = []
+    for card in soup.select("a.card-promo.card"):
+        href = urljoin(BASE_URL, card.get("href", ""))
+        title_elem = card.select_one(".dvpromo-title") or card
+        title = title_elem.get_text(strip=True)
+
+        # Ciudad: última parte del título después de "–" o del slug
+        if "–" in title:
+            city = title.split("–")[-1].strip().lower()
+        else:
+            city = href.rstrip("/").split("/")[-1].split("-")[-1]
+        city = unidecode(city)
+
+        if city not in ALLOWED_CITIES:
+            continue
+
+        rooms_elem = card.select_one(".dvpromo-info__rooms")
+        rooms = int(re.search(r"\d+", rooms_elem.get_text()).group()) if rooms_elem else 0
+        if rooms < MIN_ROOMS:
+            continue
+
+        price_elem = card.select_one(".dvpromo-info__price")
+        if not price_elem:
+            continue
+        price = int(re.sub(r"[^0-9]", "", price_elem.get_text()))
+        if price > MAX_PRICE or price == 0:
+            continue
+
+        promos.append(
+            dict(href=href, title=title, city=city, rooms=rooms, price=price)
+        )
+    return promos
+
+def main() -> None:
+    db = sqlite3.connect(DB_PATH)
+    db.execute("CREATE TABLE IF NOT EXISTS promos(href TEXT PRIMARY KEY)")
+    new_count = 0
+
+    for promo in scrape():
+        if seen_before(db, promo["href"]):
+            continue
+        notify_telegram(promo)
+        new_count += 1
+
+    print(f"Nuevas promociones enviadas: {new_count}")
 
 if __name__ == "__main__":
     main()
