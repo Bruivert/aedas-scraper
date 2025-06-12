@@ -1,11 +1,19 @@
-
 from requests_html import HTMLSession
 from urllib.parse import urljoin
-import csv, json, time, os, requests, textwrap, re
+import csv, json, time, os, requests, textwrap
 from typing import List, Dict
 
 BASE = "https://www.aedashomes.com"
 LIST_URL = f"{BASE}/viviendas-obra-nueva"
+
+CITY_MAP = {
+    "2599951": "Quart de Poblet",
+    "2599943": "Valencia",
+    "2599950": "Mislata",
+    "2599953": "Paterna",
+    "2599956": "Torrent",
+    "2599945": "Manises",
+}
 
 HEADERS = {
     "User-Agent": (
@@ -15,8 +23,6 @@ HEADERS = {
     )
 }
 
-ZONAS_VALIDAS = {"valencia", "quart de poblet", "mislata", "paterna", "torrent", "manises"}
-
 def fetch_page(session: HTMLSession, url: str):
     r = session.get(url, headers=HEADERS, timeout=30)
     r.html.render(timeout=30, sleep=1)
@@ -24,67 +30,28 @@ def fetch_page(session: HTMLSession, url: str):
 
 def extract_cards(page) -> List[Dict[str, str]]:
     cards = []
-    for link in page.html.find('a[data-automation="development-card-link"]'):
+    for a in page.html.find('a.card-promo.card'):
+        title = a.attrs.get("title", "").replace("Ir a promoción", "").strip()
+        href = a.attrs.get("href", "")
+        url = urljoin(BASE, href)
+        city_id = ""
+        if "city=" in href:
+            city_id = href.split("city=")[-1].split("&")[0].strip()
+        location = CITY_MAP.get(city_id, "Desconocido")
         cards.append({
-            "title": link.find("h3, h4", first=True).text,
-            "url": urljoin(BASE, link.attrs["href"]),
-            "location": link.find('[data-automation="development-card-city"]', first=True).text,
-            "price_from": link.find('[data-automation="development-card-price-from"]', first=True).text,
+            "title": title,
+            "url": url,
+            "location": location,
+            "price_from": "—",
         })
     return cards
 
-def es_valida(promo):
-    zona = promo["location"].strip().lower()
-    if zona not in ZONAS_VALIDAS:
-        promo["descartado_por"] = "zona"
-        return False
-
-    precio_raw = promo["price_from"]
-    if not precio_raw:
-        return True  # futura sin precio
-
-    match = re.search(r"\d[\d\.]*", precio_raw.replace('.', '').replace(',', ''))
-    if match:
-        precio = int(match.group())
-        if precio > 270000:
-            promo["descartado_por"] = "precio"
-            return False
-    return True
-
-def scrape_all(offset_step: int = 30) -> (List[Dict[str, str]], List[Dict[str, str]]):
+def scrape_all() -> List[Dict[str, str]]:
     session = HTMLSession()
-    master: List[Dict[str, str]] = []
-    descartadas: List[Dict[str, str]] = []
-
     first = fetch_page(session, LIST_URL)
-    raw_cards = extract_cards(first)
-    for p in raw_cards:
-        if es_valida(p):
-            master.append(p)
-        else:
-            descartadas.append(p)
-
-    offset = offset_step
-    while True:
-        api = f"{BASE}/api/developments?offset={offset}&limit={offset_step}&sort=relevance_desc&lang=es"
-        res = session.get(api, headers=HEADERS)
-        if res.status_code != 200 or not res.json().get("items"):
-            break
-        for item in res.json()["items"]:
-            p = {
-                "title": item["title"],
-                "url": urljoin(BASE, item["seoUrl"]),
-                "location": item["city"]["name"],
-                "price_from": item.get("priceFrom", "—"),
-            }
-            if es_valida(p):
-                master.append(p)
-            else:
-                descartadas.append(p)
-        offset += offset_step
-        time.sleep(0.4)
+    cards = extract_cards(first)
     session.close()
-    return master, descartadas
+    return cards
 
 def save_csv(rows: List[Dict[str, str]], path="promociones_aedas.csv"):
     if not rows:
@@ -94,25 +61,17 @@ def save_csv(rows: List[Dict[str, str]], path="promociones_aedas.csv"):
         w.writeheader()
         w.writerows(rows)
 
-def notify_telegram(file_path: str, total: int, descartadas: List[Dict[str, str]]):
+def notify_telegram(file_path: str, total: int):
     token = os.environ.get("TG_BOT_TOKEN")
     chat_id = os.environ.get("TG_CHAT_ID")
     if not token or not chat_id:
         print("Telegram env vars not set; skipping notification.")
         return
-
-    motivo_zona = sum(1 for d in descartadas if d.get("descartado_por") == "zona")
-    motivo_precio = sum(1 for d in descartadas if d.get("descartado_por") == "precio")
-
     msg = textwrap.dedent(f"""
-    🏘️ Scraping AEDAS terminado.
+    🏘️  Scraping AEDAS terminado.
     • Promociones extraídas: {total}
     • Archivo CSV: {file_path}
-    • Descartadas: {len(descartadas)}
-      - Por zona: {motivo_zona}
-      - Por precio: {motivo_precio}
     """).strip()
-
     resp = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data={"chat_id": chat_id, "text": msg},
@@ -122,12 +81,12 @@ def notify_telegram(file_path: str, total: int, descartadas: List[Dict[str, str]
     print("Telegram notification sent.")
 
 def main():
-    data, descartadas = scrape_all()
+    data = scrape_all()
     csv_path = "promociones_aedas.csv"
     save_csv(data, csv_path)
     with open("promociones_aedas.json", "w", encoding="utf-8") as fp:
         json.dump(data, fp, ensure_ascii=False, indent=2)
-    notify_telegram(csv_path, len(data), descartadas)
+    notify_telegram(csv_path, len(data))
     print(f"Extraídas {len(data)} promociones.")
 
 if __name__ == "__main__":
