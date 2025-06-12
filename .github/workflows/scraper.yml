@@ -1,9 +1,9 @@
-name: AEDAS Scraper
+name: AEDAS Scraper Filtrado
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 6 * * *'  # 08:15 CET
+    - cron: '15 6 * * *'  # Ejecuta todos los días a las 08:15 CET
 
 jobs:
   run:
@@ -26,11 +26,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scraper
+      - name: Run scraper AEDAS filtrado
         run: python scraper_aedas.py
 
       - name: Upload CSV
         uses: actions/upload-artifact@v4
         with:
-          name: promociones_aedas
+          name: promociones_aedas_filtradas
           path: promociones_aedas.csv
