@@ -1,37 +1,8 @@
-import requests
-import os
-import sys
-from bs4 import BeautifulSoup
-
-# --- Tu función para enviar mensajes a Telegram (está perfecta, no la cambiamos) ---
-def enviar_mensaje_telegram(texto):
-    """Envía 'texto' a tu chat/canal de Telegram y devuelve la respuesta."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
-        print("Error: Token o chat ID de Telegram no configurados en los secrets de GitHub.")
-        sys.exit(1) # Salir con código de error para que la Action falle
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": texto,
-        "parse_mode": "Markdown"
-    }
-
-    try:
-        response = requests.post(url, data=payload, timeout=15)
-        response.raise_for_status()  # Esto lanzará un error si la petición a Telegram falla
-        print("Mensaje enviado a Telegram con éxito.")
-    except requests.exceptions.RequestException as e:
-        print(f"Error al enviar a Telegram: {e}")
-        sys.exit(1) # Salir con error si no se puede notificar
-
-# --- Función principal del scraper (aquí está la lógica nueva) ---
 def main():
     """Función principal que ejecuta el scraper."""
-    URL_AEDAS = "https://www.aedashomes.com/promociones-obra-nueva"
+    # --- ¡AQUÍ ESTÁ EL CAMBIO! ---
+    # Hemos actualizado a la nueva URL de promociones de AEDAS.
+    URL_AEDAS = "https://www.aedashomes.com/viviendas-obra-nueva"
     
     # IMPORTANTE: Simulamos ser un navegador para evitar bloqueos básicos.
     headers = {
@@ -57,7 +28,7 @@ def main():
 
         if not promociones_encontradas:
             # Si no se encuentran promociones, envía un mensaje para saber que el script funcionó.
-            mensaje = "✅ El scraper de AEDAS ha funcionado, pero no se han encontrado promociones con los selectores actuales."
+            mensaje = "✅ El scraper de AEDAS ha funcionado, pero no se han encontrado promociones con los selectores actuales. Revisa la clase del 'article' en la web."
             enviar_mensaje_telegram(mensaje)
         else:
             # Si encontramos promociones, creamos un mensaje con sus nombres
@@ -71,7 +42,7 @@ def main():
             if lista_promociones:
                 mensaje = "📢 ¡Nuevas promociones encontradas en AEDAS!\n\n" + "\n".join(lista_promociones)
             else:
-                mensaje = "⚠️ Se encontraron tarjetas de promoción, pero no se pudo extraer el título. Revisa los selectores internos."
+                mensaje = "⚠️ Se encontraron tarjetas de promoción, pero no se pudo extraer el título. Revisa los selectores internos (como el 'h2')."
 
             enviar_mensaje_telegram(mensaje)
 
@@ -85,7 +56,3 @@ def main():
         error_msg = f"❌ Ha ocurrido un error inesperado en el scraper: {e}"
         print(error_msg)
         enviar_mensaje_telegram(error_msg)
-
-# --- Punto de entrada para ejecutar el script ---
-if __name__ == "__main__":
-    main()
