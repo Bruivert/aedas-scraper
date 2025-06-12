@@ -1,1 +1,3 @@
-beautifulsoup4 requests unidecode
+beautifulsoup4
+requests
+Unidecode==1.3.7
