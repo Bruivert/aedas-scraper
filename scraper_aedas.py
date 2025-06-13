@@ -86,8 +86,14 @@ def scrape_viacelere(headers):
 
         for i, tarjeta in enumerate(tarjetas):
             # --- Extracción de datos con comprobaciones ---
-            nombre_tag = tarjeta.find('h2', class_='title-size-4')
-            nombre = nombre_tag.get_text(strip=True) if nombre_tag else "SIN NOMBRE"
+            # --- NUEVO: extraer el título sin la marca “Célere” ---
+nombre_tag = tarjeta.select_one("div.title h2")          # <h2 class="title-size-4">…</h2>
+if nombre_tag:
+    raw_name = nombre_tag.get_text(" ", strip=True)      # "Célere SAN VICENTE"
+    nombre   = re.sub(r'^\s*C[eé]lere\s+', '', raw_name, flags=re.IGNORECASE) \
+                   .strip()                              # -> "SAN VICENTE"
+else:
+    nombre = "SIN NOMBRE"
 
             url_tag = tarjeta.find_parent('a')
             url_promo = url_tag['href'] if url_tag and url_tag.has_attr('href') else "SIN URL"
