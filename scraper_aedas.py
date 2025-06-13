@@ -3,7 +3,6 @@ import os
 import sys
 import re
 from bs4 import BeautifulSoup
-# --- ¡CAMBIO IMPORTANTE! Importamos la librería "ninja" ---
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -15,7 +14,7 @@ LOCALIZACIONES_DESEADAS = ["mislata", "valencia", "quart de poblet", "paterna", 
 PRECIO_MAXIMO = 270000
 HABITACIONES_MINIMAS = 2
 
-# --- Funciones auxiliares (no necesitas tocarlas) ---
+# --- Funciones auxiliares ---
 def enviar_mensaje_telegram(texto):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -38,19 +37,24 @@ def limpiar_y_convertir_a_numero(texto):
         return None
 
 def setup_driver():
-    """Configura el navegador INDETECTABLE."""
+    """Configura el navegador INDETECTABLE con el MODO FANTASMA."""
     options = uc.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    # Este es el cambio clave, usamos uc.Chrome
+    
+    # --- ¡AQUÍ ESTÁ LA MAGIA! EL MODO FANTASMA ---
+    # Esta opción intenta eliminar la variable "navigator.webdriver" que delata a Selenium.
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    
+    # Usamos uc.Chrome para que aplique sus parches anti-detección
     return uc.Chrome(options=options, use_subprocess=True)
 
-# --- SCRAPERS CON SELENIUM INDETECTABLE ---
+# --- SCRAPERS CON LÓGICA DE ROBUSTEZ ---
 
 def scrape_aedas(driver):
-    print("\n--- Iniciando scraper de AEDAS con Selenium INDETECTABLE ---", flush=True)
+    print("\n--- Iniciando scraper de AEDAS (Modo Fantasma) ---", flush=True)
     resultados = []
     try:
         url = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
@@ -68,8 +72,9 @@ def scrape_aedas(driver):
         
         tarjetas = soup.select('div.card-promo-list')
         print(f"AEDAS: Se encontraron {len(tarjetas)} promociones.", flush=True)
-        # El resto de la lógica de extracción sigue siendo la misma y es correcta
+
         for tarjeta in tarjetas:
+            # La lógica de extracción es correcta, el problema era la detección
             nombre = tarjeta.find('h2', class_='card-promo-list__title').get_text(strip=True) if tarjeta.find('h2') else "N/A"
             ubicacion = tarjeta.find('p', class_='card-promo-list__location').get_text(strip=True).lower() if tarjeta.find('p') else "N/A"
             precio_texto = tarjeta.find('p', class_='card-promo-list__price').get_text(strip=True) if tarjeta.find('p', class_='card-promo-list__price') else None
@@ -84,7 +89,7 @@ def scrape_aedas(driver):
     return resultados
 
 def scrape_viacelere(driver):
-    print("\n--- Iniciando scraper de VÍA CÉLERE con Selenium INDETECTABLE ---", flush=True)
+    print("\n--- Iniciando scraper de VÍA CÉLERE (Modo Fantasma) ---", flush=True)
     resultados = []
     try:
         url = "https://www.viacelere.com/promociones?provincia_id=46"
@@ -101,8 +106,9 @@ def scrape_viacelere(driver):
 
         tarjetas = soup.select('article.card-promotion')
         print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones.", flush=True)
-        # El resto de la lógica de extracción sigue siendo la misma y es correcta
+        
         for tarjeta in tarjetas:
+            # La lógica de extracción es correcta
             nombre = tarjeta.select_one('h2.card-promotion__title').get_text(strip=True) if tarjeta.select_one('h2') else "SIN NOMBRE"
             url_promo = tarjeta.find('a', class_='card-promotion__link')['href'] if tarjeta.find('a', class_='card-promotion__link') else "SIN URL"
             status = tarjeta.select_one('span.card-promotion__tag').get_text(strip=True) if tarjeta.select_one('span.card-promotion__tag') else "SIN ESTADO"
@@ -131,7 +137,7 @@ def main():
     finally:
         driver.quit()
     if not todos_los_resultados:
-        mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros en AEDAS o Vía Célere."
+        mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros."
     else:
         mensaje_final = f"📢 ¡Se han encontrado {len(todos_los_resultados)} promociones que cumplen tus filtros!\n"
         mensaje_final += "".join(todos_los_resultados)
