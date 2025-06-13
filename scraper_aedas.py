@@ -37,30 +37,47 @@ def limpiar_y_convertir_a_numero(texto):
     except (ValueError, TypeError):
         return None
 
-# --- SCRAPER PARA AEDAS (Sin cambios) ---
+# --- SCRAPER PARA AEDAS (LÓGICA RECONSTRUIDA Y CORRECTA) ---
 
 def scrape_aedas(headers):
     print("\n--- Iniciando scraper de AEDAS ---", flush=True)
-    # ... (código de aedas se mantiene igual, es funcional)
     resultados_aedas = []
     try:
         url_aedas = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
         response = requests.get(url_aedas, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        tarjetas = soup.select('a.card-promo.card')
+        
+        # Selector actualizado para las tarjetas de AEDAS
+        tarjetas = soup.select('div.card-promo-list')
         print(f"AEDAS: Se encontraron {len(tarjetas)} promociones.", flush=True)
+
         for tarjeta in tarjetas:
-            nombre = tarjeta.find('span', class_='promo-title').get_text(strip=True)
-            precio_texto = tarjeta.find('span', class_='promo-price').get_text(strip=True)
-            detalles_lista = tarjeta.select('ul.promo-description li')
-            ubicacion = detalles_lista[0].get_text(strip=True).lower()
-            habitaciones_texto = detalles_lista[1].get_text(strip=True)
+            nombre_tag = tarjeta.find('h2', class_='card-promo-list__title')
+            nombre = nombre_tag.get_text(strip=True) if nombre_tag else "N/A"
+
+            ubicacion_tag = tarjeta.find('p', class_='card-promo-list__location')
+            ubicacion = ubicacion_tag.get_text(strip=True).lower() if ubicacion_tag else "N/A"
+            
+            precio_tag = tarjeta.find('p', class_='card-promo-list__price')
+            precio_texto = precio_tag.get_text(strip=True) if precio_tag else None
+            
+            habitaciones_texto = None
+            features = tarjeta.select('li.card-promo-list__feature')
+            for feature in features:
+                if 'dormitorio' in feature.get_text(strip=True).lower():
+                    habitaciones_texto = feature.get_text(strip=True)
+                    break
+            
+            url_tag = tarjeta.find_parent('a')
+            url_promo = "https://www.aedashomes.com" + url_tag['href'] if url_tag and url_tag.has_attr('href') else "SIN URL"
+
             precio = limpiar_y_convertir_a_numero(precio_texto)
             habitaciones = limpiar_y_convertir_a_numero(habitaciones_texto)
+            
             if all([nombre, ubicacion, precio, habitaciones]):
                 if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
-                    url_promo = "https://www.aedashomes.com" + tarjeta.get('href', '')
+                    print(f"  -> MATCH en AEDAS: {nombre}", flush=True)
                     resultados_aedas.append(f"\n*{nombre} (AEDAS)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",","."))
     except Exception as e:
         print(f"  -> ERROR en el scraper de AEDAS: {e}", flush=True)
@@ -77,34 +94,31 @@ def scrape_viacelere(headers):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # El contenedor principal de cada promoción es un 'article'
-        tarjetas = soup.select('article.card-promotion')
+        # Selector actualizado para las tarjetas de Vía Célere
+        tarjetas = soup.select('div.vc-card-promotion')
         print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones.", flush=True)
 
         for tarjeta in tarjetas:
-            # --- Extracción con los selectores correctos ---
-            nombre_tag = tarjeta.select_one('h2.card-promotion__title')
+            nombre_tag = tarjeta.select_one('h3.vc-card-promotion__title')
             nombre = nombre_tag.get_text(strip=True) if nombre_tag else "SIN NOMBRE"
 
-            url_tag = tarjeta.find('a', class_='card-promotion__link')
+            url_tag = tarjeta.find('a')
             url_promo = url_tag['href'] if url_tag and url_tag.has_attr('href') else "SIN URL"
             
-            # El estado ('Próximamente', 'En comercialización') está en un tag específico
-            status_tag = tarjeta.select_one('span.card-promotion__tag')
+            status_tag = tarjeta.select_one('span.vc-card-promotion__tag')
             status = status_tag.get_text(strip=True) if status_tag else "SIN ESTADO"
             
-            ubicacion_tag = tarjeta.select_one('p.card-promotion__location')
+            ubicacion_tag = tarjeta.select_one('p.vc-card-promotion__location')
             ubicacion = ubicacion_tag.get_text(strip=True).lower() if ubicacion_tag else "SIN UBICACIÓN"
             
-            precio_tag = tarjeta.select_one('p.card-promotion__price')
+            precio_tag = tarjeta.select_one('p.vc-card-promotion__price')
             precio_texto = precio_tag.get_text(strip=True) if precio_tag else None
 
-            habitaciones_tag = tarjeta.select_one('p.card-promotion__typology')
+            habitaciones_tag = tarjeta.select_one('p.vc-card-promotion__typology')
             habitaciones_texto = habitaciones_tag.get_text(strip=True) if habitaciones_tag else None
             
-            print(f"  -> Crudo: N='{nombre}', U='{ubicacion}', S='{status}', H='{habitaciones_texto}', P='{precio_texto}'", flush=True)
+            print(f"  -> Crudo Vía Célere: N='{nombre}', U='{ubicacion}', S='{status}', H='{habitaciones_texto}', P='{precio_texto}'", flush=True)
 
-            # --- Lógica de filtrado ---
             if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS):
                 if 'Próximamente' in status:
                     print(f"    -> MATCH 'Próximamente': {nombre}", flush=True)
@@ -117,7 +131,6 @@ def scrape_viacelere(headers):
                     if all([precio, habitaciones]) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
                         print(f"    -> MATCH 'En Venta': {nombre}", flush=True)
                         resultados_celere.append(f"\n*{nombre} (Vía Célere)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",","."))
-
     except Exception as e:
         print(f"  -> ERROR en el scraper de VÍA CÉLERE: {e}", flush=True)
     return resultados_celere
