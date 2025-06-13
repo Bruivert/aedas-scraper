@@ -37,7 +37,7 @@ def limpiar_y_convertir_a_numero(texto):
         return None
 
 def setup_driver():
-    """Configura el navegador INDETECTABLE con la versión FIJADA."""
+    """Configura el navegador para que detecte la versión automáticamente."""
     options = uc.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -46,12 +46,12 @@ def setup_driver():
     options.add_argument('--disable-blink-features=AutomationControlled')
     
     # --- ¡AQUÍ ESTÁ LA OTRA PARTE DE LA MAGIA! ---
-    # Le decimos a la librería que use la versión 114, la misma que instalamos en el workflow.
-    return uc.Chrome(options=options, use_subprocess=True, version_main=114)
+    # Ya no especificamos 'version_main'. Dejamos que la librería lo haga automáticamente.
+    return uc.Chrome(options=options, use_subprocess=True)
 
 # --- SCRAPERS CON SELENIUM INDETECTABLE ---
 def scrape_aedas(driver):
-    print("\n--- Iniciando scraper de AEDAS (Versión Fijada) ---", flush=True)
+    print("\n--- Iniciando scraper de AEDAS (Detección Automática) ---", flush=True)
     resultados = []
     try:
         url = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
@@ -67,7 +67,6 @@ def scrape_aedas(driver):
         
         tarjetas = soup.select('div.card-promo-list')
         print(f"AEDAS: Se encontraron {len(tarjetas)} promociones.", flush=True)
-        # El resto de la lógica es correcta
         for tarjeta in tarjetas:
             nombre = tarjeta.find('h2', class_='card-promo-list__title').get_text(strip=True) if tarjeta.find('h2') else "N/A"
             ubicacion = tarjeta.find('p', class_='card-promo-list__location').get_text(strip=True).lower() if tarjeta.find('p') else "N/A"
@@ -83,7 +82,7 @@ def scrape_aedas(driver):
     return resultados
 
 def scrape_viacelere(driver):
-    print("\n--- Iniciando scraper de VÍA CÉLERE (Versión Fijada) ---", flush=True)
+    print("\n--- Iniciando scraper de VÍA CÉLERE (Detección Automática) ---", flush=True)
     resultados = []
     try:
         url = "https://www.viacelere.com/promociones?provincia_id=46"
@@ -99,7 +98,6 @@ def scrape_viacelere(driver):
 
         tarjetas = soup.select('article.card-promotion')
         print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones.", flush=True)
-        # El resto de la lógica es correcta
         for tarjeta in tarjetas:
             nombre = tarjeta.select_one('h2.card-promotion__title').get_text(strip=True) if tarjeta.select_one('h2') else "SIN NOMBRE"
             url_promo = tarjeta.find('a', class_='card-promotion__link')['href'] if tarjeta.find('a', class_='card-promotion__link') else "SIN URL"
@@ -131,7 +129,7 @@ def main():
     if not todos_los_resultados:
         mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros."
     else:
-        mensaje_final = f"📢 ¡Se han encontrado {len(todos_los_resultados)} promociones que cumplen tus filtros!\n"
+        mensaje_final = f"📢 ¡Se han encontrado {len(todos_los_resultados)} promociones!\n"
         mensaje_final += "".join(todos_los_resultados)
     enviar_mensaje_telegram(mensaje_final)
 
