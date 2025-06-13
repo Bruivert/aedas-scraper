@@ -19,11 +19,9 @@ jobs:
           python-version: '3.11'
 
       # ---- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ----
-      # Forzamos la instalación de una versión específica y estable de Chrome.
-      - name: Instalar Google Chrome (Versión Fijada)
+      # Ya no forzamos la versión. Dejamos que instale la recomendada.
+      - name: Instalar Google Chrome
         uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: '114'
 
       - name: Instalar dependencias de Python
         run: pip install -r requirements.txt
