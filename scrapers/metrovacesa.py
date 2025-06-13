@@ -2,22 +2,9 @@
 # ─────────────────────────────────────────────────────────────────────
 """
 Scraper Metrovacesa (provincia de Valencia)
-
-• URL listada: https://metrovacesa.com/promociones/valencia
-• Extrae:
-    - Nombre de la promoción
-    - Ubicación (p. ej. “VALENCIA / SAGUNTO/SAGUNT”)
-    - Precio mínimo (si existe)
-    - Nº dormitorios (si existe)
-• Filtros:
-    · Ubicación debe contener cualquiera de LOCALIZACIONES_DESEADAS
-    · Si NO es “Nuevo proyecto”:
-         – precio ≤ PRECIO_MAXIMO  (si hay precio)
-         – dormitorios ≥ HABITACIONES_MINIMAS
-    · Si ES “Nuevo proyecto”:
-         – se incluyen aunque no haya precio ni dormitorios
+• URL: https://metrovacesa.com/promociones/valencia
+• Incluye también tarjetas “Nuevo proyecto”.
 """
-
 import re, requests
 from bs4 import BeautifulSoup
 from utils import (
@@ -36,42 +23,41 @@ def scrape() -> list[str]:
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
 
-    # Cada tarjeta lleva el atributo data-provincia == "Valencia"
     cards = soup.select("div.card[data-provincia]")
     print(f"[DEBUG] METROVACESA → {len(cards)} tarjetas totales", flush=True)
 
     resultados = []
 
     for card in cards:
-        # ───── nombre ──────────────────────────────────────────────
-        name_tag = card.select_one("p.card-text.title-rel")
+        # ── nombre ────────────────────────────────────────────────
+        name_tag = card.find("p", class_=re.compile("title-rel"))
         nombre = name_tag.get_text(" ", strip=True) if name_tag else "SIN NOMBRE"
 
-        # ───── ubicación ───────────────────────────────────────────
+        # ── ubicación ─────────────────────────────────────────────
         loc_tag = card.select_one("p.card-text.mb-0")
         ubic = loc_tag.get_text(" ", strip=True).lower() if loc_tag else None
 
-        # ───── precio (atributo data-preciomin) ────────────────────
-        precio_attr = card.attrs.get("data-preciomin") or card.attrs.get("data-preciomax")
+        # ── precio ───────────────────────────────────────────────
+        precio_attr = card.get("data-preciomin") or card.get("data-preciomax")
         precio = limpiar_y_convertir_a_numero(precio_attr)
 
-        # ───── dormitorios (atributo data-numhabitaciones) ─────────
-        dorm_attr = card.attrs.get("data-numhabitaciones")
+        # ── dormitorios ──────────────────────────────────────────
+        dorm_attr = card.get("data-numhabitaciones")
         dormitorios = limpiar_y_convertir_a_numero(dorm_attr)
 
-        # ───── “Nuevo proyecto” flag ───────────────────────────────
+        # ── “Nuevo proyecto” flag ───────────────────────────────
         badge = card.select_one("span.badge")
         es_nuevo = badge and "nuevo proyecto" in badge.get_text(strip=True).lower()
 
-        # ───── enlace a la ficha ───────────────────────────────────
+        # ── enlace ───────────────────────────────────────────────
         link = card.select_one("a[href]")
         url_promo = link["href"] if link else LISTADO_URL
 
-        # ————— FILTRO POR LOCALIZACIÓN (común a ambos casos) —————
+        # ── filtro por localidad ─────────────────────────────────
         if not (ubic and any(l in ubic for l in LOCALIZACIONES_DESEADAS)):
             continue
 
-        # ——— A) NUEVO PROYECTO ——————————————————————————————
+        # ── bloque “Nuevo proyecto” ──────────────────────────────
         if es_nuevo:
             resultados.append(
                 f"\n*{nombre} (Metrovacesa – Nuevo proyecto)*"
@@ -80,7 +66,7 @@ def scrape() -> list[str]:
             )
             continue
 
-        # ——— B) EN COMERCIALIZACIÓN ————————————————­­———
+        # ── bloque en comercialización ───────────────────────────
         if dormitorios is None or dormitorios < HABITACIONES_MINIMAS:
             continue
         if precio is not None and precio > PRECIO_MAXIMO:
