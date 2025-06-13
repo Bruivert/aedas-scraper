@@ -1,49 +1,85 @@
 # scrapers/aedas.py
-import re, requests
+# Scraper AEDAS (provincia de Valencia) con salto a la página de detalle
+# ---------------------------------------------------------------------
+import re, requests, time
 from bs4 import BeautifulSoup
 from utils import (
     HEADERS, LOCALIZACIONES_DESEADAS, PRECIO_MAXIMO,
     HABITACIONES_MINIMAS, limpiar_y_convertir_a_numero
 )
 
-def scrape():
-    url = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
-    res = requests.get(url, headers=HEADERS, timeout=30)
+LISTING_URL = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
+
+def _parse_detalle(url_detalle: str) -> tuple[str, str, int | None, int | None]:
+    """
+    Devuelve (nombre, ubicacion, precio, dormitorios) a partir de la URL de detalle.
+    """
+    res = requests.get(url_detalle, headers=HEADERS, timeout=30)
+    res.raise_for_status()
+    s = BeautifulSoup(res.text, "html.parser")
+
+    # 1. Nombre de la promo  ─────────────────────────────────────────────
+    h1 = s.find("h1")
+    nombre = h1.get_text(" ", strip=True) if h1 else "SIN NOMBRE"
+
+    # 2. Ubicación (en el breadcrumb: <li><span>Valencia</span> …) ───────
+    ubic = None
+    crumb = s.select_one("nav.breadcrumb li:last-child span")
+    if crumb:
+        ubic = crumb.get_text(strip=True).lower()
+
+    # 3. Bloque <div class="features-item"> … <span class="title">Precio desde</span>
+    precio, dormitorios = None, None
+    for div in s.select("div.features-item"):
+        title = div.select_one("span.title")
+        info  = div.select_one("span.info")
+        if not (title and info):
+            continue
+        t = title.get_text(strip=True).lower()
+        if "precio" in t:
+            precio = limpiar_y_convertir_a_numero(info.get_text())
+        elif "dormitorio" in t:
+            dormitorios = limpiar_y_convertir_a_numero(info.get_text())
+
+    return nombre, ubic, precio, dormitorios
+
+
+def scrape() -> list[str]:
+    """
+    Recorre el listing de AEDAS, entra a cada promoción y filtra por los
+    criterios definidos en utils.py. Devuelve una lista de strings Markdown.
+    """
+    res = requests.get(LISTING_URL, headers=HEADERS, timeout=30)
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
 
-    # 🔎 nuevo selector: cada desarrollo va en <li class="card_item">
-    cards = soup.select("li.card_item")
-    print(f"[DEBUG] AEDAS → {len(cards)} tarjetas totales", flush=True)
+    # Cada promo está en <li class="card_item"> (si cambian la clase, cámbiala aquí)
+    cards = soup.select("li.card_item a.card_link")
+    print(f"[DEBUG] AEDAS → {len(cards)} tarjetas en el listado", flush=True)
 
     resultados = []
-    for card in cards:
-        # título = texto del <h3>
-        h3 = card.find("h3")
-        nombre = h3.get_text(strip=True) if h3 else None
+    for a in cards:
+        url_detalle = "https://www.aedashomes.com" + a["href"]
+        try:
+            nombre, ubic, precio, dormitorios = _parse_detalle(url_detalle)
+            time.sleep(0.8)               # pausa suave para no saturar el servidor
+        except Exception as exc:
+            print(f"⚠️  Error al parsear {url_detalle}: {exc}", flush=True)
+            continue
 
-        # ubicación = <span class="localidad">
-        loc = card.select_one("span.localidad")
-        ubic = loc.get_text(strip=True).lower() if loc else None
+        if not all([ubic, precio, dormitorios]):
+            continue
 
-        # dormitorios = texto que contenga “bedroom”
-        hab_tag = card.find(string=re.compile("bedroom", re.I))
-        habs = limpiar_y_convertir_a_numero(hab_tag)
+        if (any(l in ubic for l in LOCALIZACIONES_DESEADAS)
+                and precio <= PRECIO_MAXIMO
+                and dormitorios >= HABITACIONES_MINIMAS):
+            resultados.append(
+                f"\n*{nombre} (AEDAS)*"
+                f"\n📍 {ubic.title()}"
+                f"\n💶 Desde: {precio:,}€"
+                f"\n🛏️ Dorms: {dormitorios}"
+                f"\n🔗 [Ver promoción]({url_detalle})".replace(",", ".")
+            )
 
-        # precio = “From 234.000 €”
-        prec_tag = card.find(string=re.compile("€"))
-        precio = limpiar_y_convertir_a_numero(prec_tag)
-
-        if all([nombre, ubic, habs, precio]):
-            if (any(l in ubic for l in LOCALIZACIONES_DESEADAS) and
-                precio <= PRECIO_MAXIMO and
-                habs >= HABITACIONES_MINIMAS):
-                url_promo = card.find("a")["href"]
-                resultados.append(
-                    f"\n*{nombre} (AEDAS)*"
-                    f"\n📍 {ubic.title()}"
-                    f"\n💶 Desde: {precio:,}€"
-                    f"\n🛏️ Dorms: {habs}"
-                    f"\n🔗 [Ver promoción](https://www.aedashomes.com{url_promo})".replace(",", ".")
-                )
+    print(f"[DEBUG] AEDAS filtradas → {len(resultados)}", flush=True)
     return resultados
