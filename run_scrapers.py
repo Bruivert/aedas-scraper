@@ -12,13 +12,15 @@ def main() -> None:
     res_aedas     = aedas.scrape()
     res_viacelere = viacelere.scrape()
     res_metrovacesa = metrovacesa.scrape()
+    res_atica = atica.scrape()
 
     # ─── Trazas para verlos en el log de GitHub Actions ───────────────────
     print(f"[DEBUG] AEDAS     → {len(res_aedas)} promociones filtradas", flush=True)
     print(f"[DEBUG] VÍA CÉLERE → {len(res_viacelere)} promociones filtradas", flush=True)
     print(f"[DEBUG] METROVACESA → {len(res_metrovacesa)} promociones filtradas", flush=True)
+        print(f"[DEBUG] ATICA → {len(res_atica)} promociones filtradas", flush=True)
     # ─── Construye el mensaje a Telegram ──────────────────────────────────
-    resultados = res_aedas + res_viacelere + res_metrovacesa
+    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica
     if resultados:
         mensaje = (
             f"📢 ¡{len(resultados)} promociones cumplen tus filtros! 🚀\n"
