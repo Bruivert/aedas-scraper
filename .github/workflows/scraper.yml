@@ -1,20 +1,35 @@
 name: Inmobiliaria Scraper
 
 on:
+  # Permite ejecutarlo manualmente desde la pestaña Actions
   workflow_dispatch:
+  # Lo ejecuta automáticamente a una hora programada (ej: todos los días a las 8 AM UTC)
   schedule:
     - cron: '0 8 * * *'
 
 jobs:
   scrape:
+    # La máquina virtual donde se ejecutará el trabajo
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      # 1. Clona tu repositorio para que el workflow tenga acceso a tus archivos
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Configura el entorno de Python
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - env:
+
+      # 3. Instala las dependencias listadas en tu archivo requirements.txt
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      # 4. Ejecuta tu script de Python, pasando los secrets de Telegram
+      - name: Ejecutar scraper
+        env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scraper_aedas.py
+        run: python scraper_aedas.py # Asegúrate de que tu script se llama así
