@@ -8,26 +8,13 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
-      # ---- ¡AQUÍ ESTÁ EL CAMBIO CLAVE! ----
-      # Ya no forzamos la versión. Dejamos que instale la recomendada.
-      - name: Instalar Google Chrome
-        uses: browser-actions/setup-chrome@v1
-
-      - name: Instalar dependencias de Python
-        run: pip install -r requirements.txt
-
-      - name: Ejecutar el Scraper con Selenium
-        env:
+      - run: pip install -r requirements.txt
+      - env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scraper_aedas.py
