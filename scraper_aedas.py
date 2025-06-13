@@ -7,6 +7,7 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException
 
 # --- TUS FILTROS ---
 LOCALIZACIONES_DESEADAS = ["mislata", "valencia", "quart de poblet", "paterna", "manises"]
@@ -44,13 +45,25 @@ def setup_driver():
     options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
     return webdriver.Chrome(options=options)
 
-# --- SCRAPER PARA AEDAS (CON SELENIUM) ---
+# --- SCRAPERS ACTUALIZADOS Y CORREGIDOS ---
+
 def scrape_aedas(driver):
     print("\n--- Iniciando scraper de AEDAS con Selenium ---", flush=True)
     resultados = []
     try:
         url = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
         driver.get(url)
+        
+        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN PARA AEDAS! ---
+        # Esperamos al banner de cookies y lo aceptamos si aparece.
+        try:
+            cookie_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler")))
+            cookie_button.click()
+            print("  -> Banner de cookies de AEDAS aceptado.", flush=True)
+        except TimeoutException:
+            print("  -> Banner de cookies de AEDAS no encontrado, continuamos.", flush=True)
+
+        # Ahora esperamos a que las promociones carguen
         WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.card-promo-list")))
         soup = BeautifulSoup(driver.page_source, 'html.parser')
         
@@ -68,45 +81,44 @@ def scrape_aedas(driver):
             habitaciones = limpiar_y_convertir_a_numero(habitaciones_texto)
 
             if all([nombre, ubicacion, precio, habitaciones]) and any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
+                print(f"  -> MATCH en AEDAS: {nombre}", flush=True)
                 resultados.append(f"\n*{nombre} (AEDAS)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",", "."))
     except Exception as e:
         print(f"  -> ERROR en el scraper de AEDAS: {e}", flush=True)
     return resultados
 
-# --- SCRAPER PARA VÍA CÉLERE (CON SELENIUM Y TUS SELECTORES) ---
 def scrape_viacelere(driver):
     print("\n--- Iniciando scraper de VÍA CÉLERE con Selenium ---", flush=True)
     resultados = []
     try:
         url = "https://www.viacelere.com/promociones?provincia_id=46"
         driver.get(url)
-        # Esperamos a que la primera tarjeta (basada en tu foto) sea visible
-        WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.card-promocion")))
+        
+        # --- ¡AQUÍ ESTÁ LA CORRECCIÓN PARA VÍA CÉLERE! ---
+        # También intentamos aceptar las cookies por si acaso.
+        try:
+            cookie_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler")))
+            cookie_button.click()
+            print("  -> Banner de cookies de VÍA CÉLERE aceptado.", flush=True)
+        except TimeoutException:
+            print("  -> Banner de cookies de VÍA CÉLERE no encontrado, continuamos.", flush=True)
+
+        WebDriverWait(driver, 20).until(EC.visibility_of_element_located((By.CSS_SELECTOR, "article.card-promotion")))
         soup = BeautifulSoup(driver.page_source, 'html.parser')
 
-        tarjetas = soup.select('div.card-promocion')
+        tarjetas = soup.select('article.card-promotion')
         print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones.", flush=True)
 
         for tarjeta in tarjetas:
-            # Extracción usando los selectores de tu foto
-            nombre_tag = tarjeta.select_one('h2.title-size--4')
-            # Usamos un separador para que 'Célere' y 'SAN VICENTE' no se peguen
-            nombre = nombre_tag.get_text(separator=' ', strip=True) if nombre_tag else "SIN NOMBRE"
-
-            url_tag = tarjeta.find_parent('a')
-            url_promo = url_tag['href'] if url_tag and url_tag.has_attr('href') else "SIN URL"
+            nombre = tarjeta.select_one('h2.card-promotion__title').get_text(strip=True) if tarjeta.select_one('h2') else "SIN NOMBRE"
+            url_promo = tarjeta.find('a', class_='card-promotion__link')['href'] if tarjeta.find('a', class_='card-promotion__link') else "SIN URL"
+            status = tarjeta.select_one('span.card-promotion__tag').get_text(strip=True) if tarjeta.select_one('span.card-promotion__tag') else "SIN ESTADO"
+            ubicacion = tarjeta.select_one('p.card-promotion__location').get_text(strip=True).lower() if tarjeta.select_one('p.card-promotion__location') else "SIN UBICACIÓN"
+            precio_texto = tarjeta.select_one('p.card-promotion__price').get_text(strip=True) if tarjeta.select_one('p.card-promotion__price') else None
+            habitaciones_texto = tarjeta.select_one('p.card-promotion__typology').get_text(strip=True) if tarjeta.select_one('p.card-promotion__typology') else None
             
-            # El resto de datos
-            status, ubicacion, habitaciones_texto, precio_texto = "SIN ESTADO", "SIN UBICACIÓN", None, None
-            desc_items = tarjeta.select('div.desc p')
-            for item in desc_items:
-                texto = item.get_text(strip=True).lower()
-                if 'comercialización' in texto or 'próximamente' in texto: status = item.get_text(strip=True)
-                elif 'españa, valencia' in texto: ubicacion = texto
-                elif 'dormitorio' in texto: habitaciones_texto = texto
-            
-            precio_tag = tarjeta.select_one('div.precio p.paragraph-size--2:last-child')
-            precio_texto = precio_tag.get_text(strip=True) if precio_tag else None
+            # Línea de depuración mejorada para ver todos los datos
+            print(f"  -> Crudo Vía Célere: N='{nombre}', U='{ubicacion}', S='{status}', H='{habitaciones_texto}', P='{precio_texto}'", flush=True)
             
             if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS):
                 if 'Próximamente' in status:
@@ -128,7 +140,7 @@ def main():
         todos_los_resultados.extend(scrape_aedas(driver))
         todos_los_resultados.extend(scrape_viacelere(driver))
     finally:
-        driver.quit() # Aseguramos que el navegador se cierre siempre
+        driver.quit() # Aseguramos que el navegador se cierre siempre, incluso si hay errores
 
     if not todos_los_resultados:
         mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros en AEDAS o Vía Célere."
