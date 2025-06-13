@@ -14,6 +14,7 @@ def scrape():
 
     resultados = []
     for card in soup.select("div.card-promocion"):
+        print(f"[DEBUG] VÍA CÉLERE → {len(tarjetas)} tarjetas totales", flush=True)
         h2 = card.select_one("div.title h2")
         raw = h2.get_text(" ", strip=True) if h2 else ""
         nombre = re.sub(r"^\s*C[eé]lere\s+", "", raw, flags=re.I).strip()
