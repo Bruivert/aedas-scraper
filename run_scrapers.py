@@ -18,7 +18,7 @@ def main() -> None:
     print(f"[DEBUG] VÍA CÉLERE → {len(res_viacelere)} promociones filtradas", flush=True)
     print(f"[DEBUG] METROVACESA → {len(res_metrovacesa)} promociones filtradas", flush=True)
     # ─── Construye el mensaje a Telegram ──────────────────────────────────
-    resultados = res_aedas + res_viacelere
+    resultados = res_aedas + res_viacelere + res_metrovacesa
     if resultados:
         mensaje = (
             f"📢 ¡{len(resultados)} promociones cumplen tus filtros! 🚀\n"
