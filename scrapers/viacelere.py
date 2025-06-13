@@ -1,5 +1,5 @@
-# scrapers/viacelere.py  – versión 100 % adaptada al markup actual
-# ───────────────────────────────────────────────────────────────────
+# scrapers/aedas.py  – listado + bloque “Próximamente”
+# ─────────────────────────────────────────────────────────────────────
 import re, requests
 from bs4 import BeautifulSoup
 from utils import (
@@ -7,70 +7,58 @@ from utils import (
     HABITACIONES_MINIMAS, limpiar_y_convertir_a_numero
 )
 
-URL_LISTADO = "https://www.viacelere.com/promociones?provincia_id=46"
+LISTING_URL = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
 
 def scrape() -> list[str]:
-    res = requests.get(URL_LISTADO, headers=HEADERS, timeout=30)
+    res = requests.get(LISTING_URL, headers=HEADERS, timeout=30)
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
 
-    cards = soup.select("div.card-promocion")
-    print(f"[DEBUG] VÍA CÉLERE → {len(cards)} tarjetas totales", flush=True)
+    cards = soup.select("a.card-promo.card")
+    print(f"[DEBUG] AEDAS → {len(cards)} tarjetas en el listado", flush=True)
 
-    resultados: list[str] = []
+    resultados = []
 
     for card in cards:
-        # ── título (quitamos “Célere ”) ────────────────────────────────
-        h2   = card.select_one("h2.title-size-4")
-        raw  = h2.get_text(" ", strip=True) if h2 else ""
-        nombre = re.sub(r"^\s*C[eé]lere\s+", "", raw, flags=re.I).strip()
+        # ── título ───────────────────────────────────────────────
+        title_tag = card.select_one("span.promo-title")
+        nombre = title_tag.get_text(strip=True) if title_tag else None
 
-        # ── enlace a la ficha ─────────────────────────────────────────
-        link = card.find_parent("a") or card.select_one("a.button")
-        url_promo = link["href"] if (link and link.has_attr("href")) else "SIN URL"
+        # ── descripción (ubicación, habs, “Próximamente”…) ───────
+        desc_items = [li.get_text(strip=True) for li in card.select("ul.promo-description li")]
+        ubic        = next((d.lower() for d in desc_items if "," in d), None)
+        dorm_txt    = next((d       for d in desc_items if "dormitorio"  in d.lower()), None)
+        soon_txt    = next((d       for d in desc_items if "próxim"      in d.lower()), None)
 
-        # ── descripción: ubicación, estado y dormitorios ─────────────
-        ubic, status, dorm_txt = None, None, None
-        for p in card.select("div.desc p.paragraph-size--2"):
-            low = p.get_text(strip=True).lower()
-            if "españa, valencia" in low:
-                ubic = low
-            elif "dormitorio" in low:
-                dorm_txt = low
-            elif "comercialización" in low or "próximamente" in low:
-                status = p.get_text(strip=True)
-
-        # ── precio (si existe) ────────────────────────────────────────
-        precio_tag = card.select_one("div.precio")
-        precio_txt = precio_tag.get_text(strip=True) if precio_tag else None
-        precio     = limpiar_y_convertir_a_numero(precio_txt)
+        # ── precio ───────────────────────────────────────────────
+        price_tag = card.select_one("span.promo-price")
+        precio = limpiar_y_convertir_a_numero(price_tag.get_text(strip=True) if price_tag else None)
 
         dormitorios = limpiar_y_convertir_a_numero(dorm_txt)
 
-        # ── filtro de ubicación (imprescindible) ─────────────────────
-        if not (ubic and any(l in ubic for l in LOCALIZACIONES_DESEADAS)):
-            continue
-
-        # ── lógica por estado ────────────────────────────────────────
-        if status and "próximamente" in status.lower():
+        # ─┤  1. BLOQUE “PRÓXIMAMENTE” (ignora precio y habs) ├────
+        if soon_txt and ubic and any(l in ubic for l in LOCALIZACIONES_DESEADAS):
+            url_promo = "https://www.aedashomes.com" + card["href"]
             resultados.append(
-                f"\n*{nombre} (Vía Célere ‒ Próximamente)*"
+                f"\n*{nombre} (AEDAS ‒ Próximamente)*"
                 f"\n📍 {ubic.title()}"
-                f"\n🛏️ {dormitorios or '—'} dormitorios"
                 f"\n🔗 [Ver promoción]({url_promo})"
             )
+            continue   # pasamos a la siguiente tarjeta
 
-        elif status and "comercialización" in status.lower():
-            # precio puede faltar; solo se filtra si existe
-            if (dormitorios is not None and dormitorios >= HABITACIONES_MINIMAS
-                    and (precio is None or precio <= PRECIO_MAXIMO)):
+        # ─┤  2. BLOQUE NORMAL (con precio y dorm. mínimos) ├──────
+        if all([ubic, precio, dormitorios]):
+            if (any(l in ubic for l in LOCALIZACIONES_DESEADAS)
+                    and precio <= PRECIO_MAXIMO
+                    and dormitorios >= HABITACIONES_MINIMAS):
+                url_promo = "https://www.aedashomes.com" + card["href"]
                 resultados.append(
-                    f"\n*{nombre} (Vía Célere)*"
+                    f"\n*{nombre} (AEDAS)*"
                     f"\n📍 {ubic.title()}"
-                    f"\n💶 Desde: {precio:,}€" if precio else ""
+                    f"\n💶 Desde: {precio:,}€"
                     f"\n🛏️ Dorms: {dormitorios}"
                     f"\n🔗 [Ver promoción]({url_promo})".replace(",", ".")
                 )
 
-    print(f"[DEBUG] VÍA CÉLERE filtradas → {len(resultados)}", flush=True)
+    print(f"[DEBUG] AEDAS filtradas → {len(resultados)}", flush=True)
     return resultados
