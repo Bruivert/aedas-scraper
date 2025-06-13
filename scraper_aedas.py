@@ -37,22 +37,20 @@ def limpiar_y_convertir_a_numero(texto):
     except (ValueError, TypeError):
         return None
 
-# --- SCRAPER PARA AEDAS (Sin cambios) ---
+# --- SCRAPER PARA AEDAS (Funciona perfecto, sin cambios) ---
 
 def scrape_aedas(headers):
     print("\n--- Iniciando scraper de AEDAS ---", flush=True)
     resultados_aedas = []
     try:
+        # ... (código de aedas sin cambios)
         url_aedas = "https://www.aedashomes.com/viviendas-obra-nueva?province=2509951"
         response = requests.get(url_aedas, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-
         tarjetas = soup.select('a.card-promo.card')
         print(f"AEDAS: Se encontraron {len(tarjetas)} promociones.", flush=True)
-
         for tarjeta in tarjetas:
-            # ... (Lógica de AEDAS se mantiene igual)
             nombre = tarjeta.find('span', class_='promo-title').get_text(strip=True)
             precio_texto = tarjeta.find('span', class_='promo-price').get_text(strip=True)
             detalles_lista = tarjeta.select('ul.promo-description li')
@@ -60,7 +58,6 @@ def scrape_aedas(headers):
             habitaciones_texto = detalles_lista[1].get_text(strip=True)
             precio = limpiar_y_convertir_a_numero(precio_texto)
             habitaciones = limpiar_y_convertir_a_numero(habitaciones_texto)
-
             if all([nombre, ubicacion, precio, habitaciones]):
                 if any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
                     print(f"  -> MATCH en AEDAS: {nombre}", flush=True)
@@ -70,7 +67,7 @@ def scrape_aedas(headers):
         print(f"  -> ERROR en el scraper de AEDAS: {e}", flush=True)
     return resultados_aedas
 
-# --- SCRAPER PARA VÍA CÉLERE (LÓGICA COMPLETAMENTE NUEVA) ---
+# --- SCRAPER PARA VÍA CÉLERE (LÓGICA CORREGIDA Y MÁS ROBUSTA) ---
 
 def scrape_viacelere(headers):
     print("\n--- Iniciando scraper de VÍA CÉLERE ---", flush=True)
@@ -80,17 +77,21 @@ def scrape_viacelere(headers):
         response = requests.get(url_celere, headers=headers, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Usamos el selector del contenedor principal de la tarjeta
         tarjetas = soup.select('div.card-promocion')
         print(f"VÍA CÉLERE: Se encontraron {len(tarjetas)} promociones.", flush=True)
 
         for tarjeta in tarjetas:
-            # Extraemos todos los datos posibles basándonos en tus fotos
-            nombre = tarjeta.find('h2', class_='title-size-4').get_text(strip=True)
-            url_promo = tarjeta.find_parent('a')['href']
+            # --- CORRECCIÓN: Comprobamos si el tag existe ANTES de usarlo ---
+            nombre_tag = tarjeta.find('h2', class_='title-size-4')
+            if not nombre_tag:
+                continue # Si no tiene título, saltamos a la siguiente promoción
+            nombre = nombre_tag.get_text(strip=True)
 
-            # Extraemos todos los párrafos de descripción para clasificarlos
+            url_tag = tarjeta.find_parent('a')
+            if not url_tag or not url_tag.has_attr('href'):
+                continue # Si no tiene enlace, la saltamos
+            url_promo = url_tag['href']
+
             status, ubicacion, habitaciones_texto = None, None, None
             desc_items = tarjeta.select('div.desc p')
             for item in desc_items:
@@ -102,26 +103,21 @@ def scrape_viacelere(headers):
                 elif 'dormitorio' in texto:
                     habitaciones_texto = texto
             
-            # Extraemos el precio
             precio_tag = tarjeta.select_one('div.precio p.paragraph-size--2:last-child')
             precio_texto = precio_tag.get_text(strip=True) if precio_tag else None
 
             print(f"  -> Analizando VÍA CÉLERE: {nombre} | {ubicacion} | Estado: {status}", flush=True)
 
-            # --- APLICAMOS LA LÓGICA DE FILTROS DIFERENCIADA ---
             if ubicacion and any(loc in ubicacion for loc in LOCALIZACIONES_DESEADAS):
                 if status and 'Próximamente' in status:
                     print(f"    -> MATCH 'Próximamente': {nombre}", flush=True)
                     resultados_celere.append(f"\n*{nombre} (Vía Célere - Próximamente)*\n📍 {ubicacion.title()}\n🔗 [Ver promoción]({url_promo})")
-                
                 elif status and 'En comercialización' in status:
                     precio = limpiar_y_convertir_a_numero(precio_texto)
                     habitaciones = limpiar_y_convertir_a_numero(habitaciones_texto)
-                    
                     if all([precio, habitaciones]) and precio <= PRECIO_MAXIMO and habitaciones >= HABITACIONES_MINIMAS:
                         print(f"    -> MATCH 'En Venta': {nombre}", flush=True)
                         resultados_celere.append(f"\n*{nombre} (Vía Célere)*\n📍 {ubicacion.title()}\n💶 Desde: {precio:,}€\n🛏️ Dorms: {habitaciones}\n🔗 [Ver promoción]({url_promo})".replace(",","."))
-
     except Exception as e:
         print(f"  -> ERROR en el scraper de VÍA CÉLERE: {e}", flush=True)
     return resultados_celere
@@ -130,18 +126,14 @@ def scrape_viacelere(headers):
 
 def main():
     HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-    
     todos_los_resultados = []
-    
     todos_los_resultados.extend(scrape_aedas(HEADERS))
     todos_los_resultados.extend(scrape_viacelere(HEADERS))
-    
     if not todos_los_resultados:
         mensaje_final = f"✅ Scrapers finalizados.\n\nNo se ha encontrado ninguna promoción nueva que cumpla tus filtros en AEDAS o Vía Célere."
     else:
         mensaje_final = f"📢 ¡Se han encontrado {len(todos_los_resultados)} promociones que cumplen tus filtros!\n"
         mensaje_final += "".join(todos_los_resultados)
-        
     enviar_mensaje_telegram(mensaje_final)
 
 if __name__ == "__main__":
