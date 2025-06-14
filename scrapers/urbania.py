@@ -1,96 +1,61 @@
-# scrapers/urbania.py
-# ──────────────────────────────────────────────────────────────
-"""
-Scraper Urbania (provincia de Valencia)
-
-• URL: https://urbania.es/proyectos/valencia/
-• Saca:
-    – Nombre  (h2)
-    – Ubicación / municipio  (h3)
-    – Dormitorios  (“Dormitorios: 2 y 3”)
-    – Precio  (<strong>240.900€</strong>)
-• Filtros:
-    · Ubicación debe contener alguna LOCALIZACIONES_DESEADAS
-    · Si falta precio o dormitorios → se considera “Próximamente”
-    · Si hay ambos:
-        – dormitorios ≥ HABITACIONES_MINIMAS
-        – precio ≤ PRECIO_MAXIMO
-"""
-import re, time
-import requests
+# scrapers/urbania.py  – solo “en venta”, filtros corregidos
+import re, time, unicodedata, requests
 from bs4 import BeautifulSoup
 from utils import (
     HEADERS, LOCALIZACIONES_DESEADAS,
     PRECIO_MAXIMO, HABITACIONES_MINIMAS,
-    limpiar_y_convertir_a_numero,
 )
 
-LISTADO_URL = "https://urbania.es/proyectos/valencia/"
+URL = "https://urbania.es/proyectos/valencia/"
 
+NUM_RE = re.compile(r"\d[\d.,]*")
 
-def _numero_desde_texto(txt: str | None) -> int | None:
-    """Devuelve el primer número entero del texto (quita . y ,)."""
-    if not txt:
+def normalizar(texto: str) -> str:
+    """Minúsculas sin tildes para comparar localidades."""
+    txt = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return txt.lower()
+
+def max_numero(texto: str | None) -> int | None:
+    """Devuelve el número MÁS ALTO que aparezca (para '1, 2, 3 y 4')."""
+    if not texto:
         return None
-    m = re.search(r"\d[\d.,]*", txt)
-    if not m:
-        return None
-    return int(m.group(0).replace(".", "").replace(",", ""))
-
+    numeros = [int(t.replace(".", "").replace(",", "")) for t in NUM_RE.findall(texto)]
+    return max(numeros) if numeros else None
 
 def scrape() -> list[str]:
-    html = requests.get(LISTADO_URL, headers=HEADERS, timeout=30).text
-    soup = BeautifulSoup(html, "html.parser")
-
+    soup = BeautifulSoup(requests.get(URL, headers=HEADERS, timeout=30).text, "html.parser")
     cards = soup.select("div.vivienda div.row")
     print(f"[DEBUG] URBANIA → {len(cards)} tarjetas totales", flush=True)
 
-    resultados: list[str] = []
-
+    resultados = []
     for c in cards:
-        # ─── Nombre y ubicación ─────────────────────────────────
-        h2_tag = c.find("h2")
-        nombre = h2_tag.get_text(" ", strip=True) if h2_tag else "SIN NOMBRE"
+        nombre = (c.find("h2") or "").get_text(" ", strip=True)
+        ubic_raw = (c.find("h3") or "").get_text(" ", strip=True)
+        ubic = normalizar(ubic_raw)
 
-        h3_tag = c.find("h3")
-        ubic = h3_tag.get_text(" ", strip=True).lower() if h3_tag else None
-        if not (ubic and any(l in ubic for l in LOCALIZACIONES_DESEADAS)):
+        if not nombre or not any(normalizar(l) in ubic for l in LOCALIZACIONES_DESEADAS):
             continue
 
-        # ─── Enlace ────────────────────────────────────────────
-        link = c.find_parent("a", href=True)
-        url  = link["href"] if link else LISTADO_URL
+        dorm_txt = (c.find("p", class_=re.compile("carac")) or "").get_text()
+        dormitorios = max_numero(dorm_txt)
 
-        # ─── Dormitorios ───────────────────────────────────────
-        dorm_tag = c.find("p", class_=re.compile("carac"))
-        dormitorios = _numero_desde_texto(dorm_tag.get_text() if dorm_tag else None)
-
-        # ─── Precio ────────────────────────────────────────────
-        strong = c.find("strong")
-        precio = _numero_desde_texto(strong.get_text() if strong else None)
-
-        # ─── Lógica de filtrado ────────────────────────────────
-        es_prox = precio is None or dormitorios is None
-
-        if es_prox:
-            resultados.append(
-                f"\n*{nombre} (Urbania – Próximamente)*"
-                f"\n📍 {ubic.title()}"
-                f"\n🔗 [Ver promoción]({url})"
-            )
-            continue
-
+        precio = max_numero((c.find("strong") or "").get_text())
+        if None in (precio, dormitorios):
+            continue            # descarta si falta algún dato
         if dormitorios < HABITACIONES_MINIMAS or precio > PRECIO_MAXIMO:
             continue
 
+        link = c.find_parent("a", href=True)
+        url  = link["href"] if link else URL
+
         resultados.append(
             f"\n*{nombre} (Urbania)*"
-            f"\n📍 {ubic.title()}"
+            f"\n📍 {ubic_raw.title()}"
             f"\n💶 Desde: {precio:,}€"
             f"\n🛏️ Dorms: {dormitorios}"
             f"\n🔗 [Ver promoción]({url})".replace(",", ".")
         )
-        time.sleep(0.2)
+        time.sleep(0.15)
 
     print(f"[DEBUG] URBANIA filtradas → {len(resultados)}", flush=True)
     return resultados
