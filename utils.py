@@ -40,13 +40,30 @@ def limpiar_y_convertir_a_numero(texto: str | None) -> int | None:
 
 
 # ——— util para escapar Markdown ————————————————————————
+# ——— util para escapar Markdown SIN tocar la URL de los enlaces ———
 MD_SPECIALS = r"[_*~`>#+\-=|{}.!]"
 
 def escapar_markdown(texto: str) -> str:
-    """Escapa todos los caracteres especiales de Markdown v2."""
-    return re.sub(MD_SPECIALS, lambda m: f"\\{m.group(0)}", texto)
+    """
+    • Escapa caracteres especiales en Markdown v2
+    • Mantiene intactas las URL dentro de [texto](url)
+    """
+    def _escape_segment(seg: str) -> str:
+        return re.sub(MD_SPECIALS, lambda m: f"\\{m.group(0)}", seg)
 
-
+    resultado, pos = [], 0
+    # Recorre el texto buscando patrones [label](url)
+    for m in re.finditer(r"\[[^\]]+\]\([^)]+\)", texto):
+        inicio, fin = m.span()
+        # Escapa la parte anterior al link
+        resultado.append(_escape_segment(texto[pos:inicio]))
+        label, url = re.match(r"\[([^\]]+)\]\(([^)]+)\)", m.group(0)).groups()
+        # Escapa SOLO el label
+        resultado.append(f"[{_escape_segment(label)}]({url})")
+        pos = fin
+    # Escapa el resto que queda después del último enlace
+    resultado.append(_escape_segment(texto[pos:]))
+    return "".join(resultado)
 # ——— envío robusto a Telegram ——————————————————————————
 def enviar_mensaje_telegram(texto: str) -> None:
     """
