@@ -29,7 +29,7 @@ def main() -> None:
     print(f"[DEBUG] URBANIA        → {len(res_urbania)} promociones filtradas", flush=True)
 
     # ─── Une todos los resultados ───────────────────────────────────────
-    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica
+    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania
 
     if resultados:
         mensaje = (
