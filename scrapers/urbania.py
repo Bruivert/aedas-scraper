@@ -1,10 +1,4 @@
-# scrapers/urbania.py
-# ──────────────────────────────────────────────────────────────
-"""
-Scraper Urbania – sólo promociones EN VENTA (no “Próximamente”)
-Filtros: localidad ∈ LOCALIZACIONES_DESEADAS, precio ≤ PRECIO_MAXIMO,
-         dormitorios ≥ HABITACIONES_MINIMAS
-"""
+# scrapers/urbania.py  – EN VENTA solo, control None definitivo
 import re, time, unicodedata, requests
 from bs4 import BeautifulSoup
 from utils import (
@@ -16,33 +10,29 @@ URL = "https://urbania.es/proyectos/valencia/"
 NUM_RE = re.compile(r"\d[\d.,]*")
 
 def _num(txt: str | None, pick_max=False) -> int | None:
-    """Devuelve el primer número del texto; si pick_max=True el mayor."""
-    if not txt:
-        return None
+    if not txt: return None
     nums = [int(n.replace(".", "").replace(",", "")) for n in NUM_RE.findall(txt)]
-    if not nums:
-        return None
-    return max(nums) if pick_max else nums[0]
+    return max(nums) if (nums and pick_max) else (nums[0] if nums else None)
 
 def _norm(s: str) -> str:
-    """Minúsculas sin acentos para comparación."""
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
 
 def scrape() -> list[str]:
     html = requests.get(URL, headers=HEADERS, timeout=30).text
     soup = BeautifulSoup(html, "html.parser")
-
     cards = soup.select("div.vivienda div.row")
     print(f"[DEBUG] URBANIA → {len(cards)} tarjetas totales", flush=True)
 
     resultados = []
     for c in cards:
-        # Nombre y ubicación
-        nombre = (c.find("h2") or "").get_text(" ", strip=True)
-        h3_tag = c.find("h3")
+        # Nombre
+        h2_tag = c.find("h2")
+        nombre = h2_tag.get_text(" ", strip=True) if h2_tag else "SIN NOMBRE"
+
+        # Ubicación
+        h3_tag   = c.find("h3")
         ubic_raw = h3_tag.get_text(" ", strip=True) if h3_tag else ""
-        ubic_ok  = any(_norm(l) in _norm(ubic_raw) for l in LOCALIZACIONES_DESEADAS)
-        if not (nombre and ubic_ok):
+        if not any(_norm(l) in _norm(ubic_raw) for l in LOCALIZACIONES_DESEADAS):
             continue
 
         # Dormitorios (máximo de la línea)
@@ -57,15 +47,15 @@ def scrape() -> list[str]:
             continue
 
         # Enlace
-        link  = c.find_parent("a", href=True)
-        url_promo = link["href"] if link else URL
+        link = c.find_parent("a", href=True)
+        url  = link["href"] if link else URL
 
         resultados.append(
             f"\n*{nombre} (Urbania)*"
             f"\n📍 {ubic_raw.title()}"
             f"\n💶 Desde: {precio:,}€"
             f"\n🛏️ Dorms: {dormitorios}"
-            f"\n🔗 [Ver promoción]({url_promo})".replace(",", ".")
+            f"\n🔗 [Ver promoción]({url})".replace(",", ".")
         )
         time.sleep(0.15)
 
