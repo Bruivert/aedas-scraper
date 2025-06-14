@@ -40,7 +40,7 @@ def limpiar_y_convertir_a_numero(texto: str | None) -> int | None:
 
 
 # ——— util para escapar Markdown ————————————————————————
-MD_SPECIALS = r"[_*[\]()~`>#+\-=|{}.!]"
+MD_SPECIALS = r"[_*~`>#+\-=|{}.!]"
 
 def escapar_markdown(texto: str) -> str:
     """Escapa todos los caracteres especiales de Markdown v2."""
