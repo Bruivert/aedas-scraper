@@ -25,7 +25,6 @@ LOCALIZACIONES_DESEADAS = [
 PRECIO_MAXIMO        = 270_000         # euros
 HABITACIONES_MINIMAS = 2               # dormitorios mínimos
 
-
 # ────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────
@@ -40,34 +39,56 @@ def limpiar_y_convertir_a_numero(texto: str | None) -> int | None:
     return int(nums[0].replace(".", "")) if nums else None
 
 
+# ——— util para escapar Markdown ————————————————————————
+MD_SPECIALS = r"[_*[\]()~`>#+\-=|{}.!]"
+
+def escapar_markdown(texto: str) -> str:
+    """Escapa todos los caracteres especiales de Markdown v2."""
+    return re.sub(MD_SPECIALS, lambda m: f"\\{m.group(0)}", texto)
+
+
+# ——— envío robusto a Telegram ——————————————————————————
 def enviar_mensaje_telegram(texto: str) -> None:
     """
     Envía 'texto' al chat definido en las variables de entorno:
       • TELEGRAM_BOT_TOKEN
       • TELEGRAM_CHAT_ID
-    Finaliza el programa con exit(1) si la llamada falla.
+
+    • Divide el mensaje en bloques ≤ 3 500 chars (margen sobre 4 096).
+    • Escapa caracteres Markdown problemáticos.
+    • Si Telegram devuelve 400, reenvía el bloque como texto plano.
     """
     token   = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
-
     if not token or not chat_id:
         raise SystemExit("❌ Falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID")
 
-    # Telegram permite 4 096 caracteres por mensaje
-    if len(texto) > 4_096:
-        texto = texto[:3_900] + "\n\n[Mensaje truncado…]"
+    texto = escapar_markdown(texto)
+    url   = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": texto,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
+    while texto:
+        bloque = texto[:3500]                      # margen de seguridad
+        corte  = bloque.rfind("\n")
+        if 0 < corte < 3200:                       # corta en línea completa
+            bloque = bloque[:corte]
+        texto = texto[len(bloque):]
 
-    try:
-        res = requests.post(url, data=payload, timeout=20)
-        res.raise_for_status()
-        print("✅ Mensaje enviado a Telegram", flush=True)
-    except Exception as exc:
-        raise SystemExit(f"❌ Error al enviar mensaje a Telegram: {exc}")
+        payload = {
+            "chat_id": chat_id,
+            "text": bloque,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+
+        try:
+            r = requests.post(url, data=payload, timeout=20)
+            r.raise_for_status()
+        except requests.exceptions.HTTPError as http_exc:
+            # 400 Bad Request normalmente por Markdown mal escapado
+            print(f"⚠️  Telegram 400: reenvío bloque sin Markdown → {http_exc}")
+            payload.pop("parse_mode", None)
+            requests.post(url, data=payload, timeout=20).raise_for_status()
+        except Exception as exc:
+            raise SystemExit(f"❌ Error al enviar a Telegram: {exc}")
+
+    print("✅ Mensajes enviados a Telegram", flush=True)
