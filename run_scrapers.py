@@ -35,7 +35,7 @@ def main() -> None:
     print(f"[DEBUG] GRUPO LOBE        → {len(res_lobe)} promociones filtradas", flush=True)
 
     # ─── Une todos los resultados ───────────────────────────────────────
-    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania + res_albaluz
+    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania + res_albaluz + res_lobe
 
     if resultados:
         mensaje = (
