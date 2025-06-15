@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from utils import (
     HEADERS,
     LOCALIZACIONES_DESEADAS,
+    PRECIO_MAXIMO,
     HABITACIONES_MINIMAS,
     limpiar_y_convertir_a_numero,
 )
@@ -18,9 +19,8 @@ LISTADO_URL = (
     "&price=0%2C270000"
 )
 
-# ─── helpers ───────────────────────────────────────────────────
+# ── helpers ────────────────────────────────────────────────────
 def _norm(s: str) -> str:
-    """Minúsculas sin tildes ni espacios extremos."""
     return (
         unicodedata.normalize("NFKD", s)
         .encode("ascii", "ignore")
@@ -29,17 +29,18 @@ def _norm(s: str) -> str:
         .strip()
     )
 
-def _municipio(cadena_ubic: str) -> str:
-    """
-    Devuelve el municipio sin la palabra 'valencia' ni separadores
-    '.', '·', '-', '|'.
-    """
-    sin_prov = re.sub(r"\bvalencia\b", "", cadena_ubic, flags=re.I)
+def _municipio(ubic: str) -> str:
+    sin_prov = re.sub(r"\bvalencia\b", "", ubic, flags=re.I)
     limpio   = re.sub(r"[.\-·|]", " ", sin_prov)
     limpio   = re.sub(r"\s+", " ", limpio)
     return _norm(limpio)
 
-# ─── scraper ───────────────────────────────────────────────────
+def _precio_desde_card(card: BeautifulSoup) -> int | None:
+    """Devuelve el primer número seguido de ‘€’ dentro de la tarjeta."""
+    m = re.search(r"\d[\d.]*\s*€", card.get_text(" ", strip=True))
+    return limpiar_y_convertir_a_numero(m.group(0)) if m else None
+
+# ── scraper ────────────────────────────────────────────────────
 def scrape() -> list[str]:
     scraper = cloudscraper.create_scraper(
         browser={"browser": "firefox", "platform": "windows", "mobile": False}
@@ -62,12 +63,12 @@ def scrape() -> list[str]:
         nombre = h3.get_text(" ", strip=True) if h3 else "SIN NOMBRE"
 
         # ─ Ubicación (municipio) ────────────────────────────────
-        loc_tag = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
-        ubic_raw = loc_tag.get_text(" ", strip=True) if loc_tag else ""
+        loc_tag   = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
+        ubic_raw  = loc_tag.get_text(" ", strip=True) if loc_tag else ""
         municipio = _municipio(ubic_raw)
 
-        if not any(_norm(l) in municipio for l in LOCALIZACIONES_DESEADAS):
-            continue  # fuera de tu lista
+        if not any(_norm(loc) in municipio for loc in LOCALIZACIONES_DESEADAS):
+            continue
 
         # ─ Enlace ───────────────────────────────────────────────
         link = card.select_one("a.cont[href]")
@@ -77,12 +78,16 @@ def scrape() -> list[str]:
         badge = card.find("span", class_=re.compile("badge"))
         es_nuevo = badge and "nuevo proyecto" in badge.get_text(strip=True).lower()
 
-        # ─ Dormitorios (atributo o span.habitaciones) ──────────
+        # ─ Dormitorios ──────────────────────────────────────────
         dormitorios = limpiar_y_convertir_a_numero(card.get("data-numhabitaciones"))
         if dormitorios is None:
             hab_tag = card.find("span", class_=re.compile("habitaciones", re.I))
             dormitorios = limpiar_y_convertir_a_numero(hab_tag.get_text() if hab_tag else None)
 
+        # ─ Precio ───────────────────────────────────────────────
+        precio = _precio_desde_card(card)
+
+        # ─ Bloque “Nuevo proyecto” ──────────────────────────────
         if es_nuevo:
             resultados.append(
                 f"\n*{nombre} (Ática – Nuevo proyecto)*"
@@ -91,14 +96,18 @@ def scrape() -> list[str]:
             )
             continue
 
+        # ─ Filtros en venta ─────────────────────────────────────
+        if precio is None or precio > PRECIO_MAXIMO:
+            continue
         if dormitorios is not None and dormitorios < HABITACIONES_MINIMAS:
-            continue  # precios ya ≤ 270 000 € gracias a la URL
+            continue
 
         resultados.append(
             f"\n*{nombre} (Ática)*"
             f"\n📍 {ubic_raw.title()}"
+            f"\n💶 Desde: {precio:,}€"
             f"\n🛏️ Dorms: {dormitorios if dormitorios else '—'}"
-            f"\n🔗 [Ver promoción]({url_promo})"
+            f"\n🔗 [Ver promoción]({url_promo})".replace(",", ".")
         )
         time.sleep(0.3)
 
