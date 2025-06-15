@@ -64,7 +64,8 @@ def scrape() -> list[str]:
 
         # ─ Ubicación (municipio) ────────────────────────────────
         loc_tag   = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
-        ubic_raw  = loc_tag.get_text(" ", strip=True) if loc_tag else ""
+        ubic_raw = loc_tag.get_text(" ", strip=True) if loc_tag else ""
+ubic_raw = re.sub(r"^[\s.\-·|]+", "", ubic_raw)   # quita separadores iniciales
         municipio = _municipio(ubic_raw)
 
         if not any(_norm(loc) in municipio for loc in LOCALIZACIONES_DESEADAS):
