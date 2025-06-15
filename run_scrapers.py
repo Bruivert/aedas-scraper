@@ -20,6 +20,7 @@ def main() -> None:
     res_metrovacesa = metrovacesa.scrape()
     res_atica       = atica.scrape()
     res_urbania     = urbania.scrape()
+    res_albaluz     = albaluz.scrape()
 
     # ─── Traza de control en el log ─────────────────────────────────────
     print(f"[DEBUG] AEDAS        → {len(res_aedas)} promociones filtradas", flush=True)
@@ -27,9 +28,10 @@ def main() -> None:
     print(f"[DEBUG] METROVACESA  → {len(res_metrovacesa)} promociones filtradas", flush=True)
     print(f"[DEBUG] ÁTICA        → {len(res_atica)} promociones filtradas", flush=True)
     print(f"[DEBUG] URBANIA        → {len(res_urbania)} promociones filtradas", flush=True)
+    print(f"[DEBUG] ALBALUZ        → {len(res_albaluz)} promociones filtradas", flush=True)
 
     # ─── Une todos los resultados ───────────────────────────────────────
-    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania
+    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania + res_albaluz
 
     if resultados:
         mensaje = (
