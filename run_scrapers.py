@@ -8,7 +8,8 @@ from scrapers import (
     viacelere,
     metrovacesa,
     atica,        
-    urbania,# ← nuevo scraper
+    urbania,
+    albaluz# ← nuevo scraper
 )
 from utils import enviar_mensaje_telegram
 
