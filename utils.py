@@ -41,7 +41,7 @@ def limpiar_y_convertir_a_numero(texto: str | None) -> int | None:
 
 # ——— util para escapar Markdown ————————————————————————
 # ——— util para escapar Markdown SIN tocar la URL de los enlaces ———
-MD_SPECIALS = r"[_*~`>#+\-=|{}.!]"
+MD_SPECIALS = r"[_*~`>#+=|{}!]"
 
 def escapar_markdown(texto: str) -> str:
     """
