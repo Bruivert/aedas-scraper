@@ -19,13 +19,21 @@ LISTADO_URL = (
 )
 
 # ─── helpers ───────────────────────────────────────────────────
-def _norm(txt: str) -> str:
-    """Minúsculas sin tildes para comparar localidades."""
-    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode().lower().strip()
+def _norm(texto: str) -> str:
+    """Minúsculas sin acentos, sin espacios de extremos."""
+    return (
+        unicodedata.normalize("NFKD", texto)
+        .encode("ascii", "ignore")
+        .decode()
+        .lower()
+        .strip()
+    )
 
 # ─── scraper ───────────────────────────────────────────────────
 def scrape() -> list[str]:
-    scraper = cloudscraper.create_scraper(browser={"browser": "firefox", "platform": "windows"})
+    scraper = cloudscraper.create_scraper(
+        browser={"browser": "firefox", "platform": "windows", "mobile": False}
+    )
     try:
         html = scraper.get(LISTADO_URL, headers=HEADERS, timeout=30).text
     except Exception as exc:
@@ -36,53 +44,54 @@ def scrape() -> list[str]:
     cards = soup.select("div.item-vivienda")
     print(f"[DEBUG] ÁTICA → {len(cards)} tarjetas totales", flush=True)
 
-    resultados = []
+    resultados: list[str] = []
 
     for card in cards:
-        # ─── Nombre ────────────────────────────────────────────
-        h3 = card.find("h3")
-        nombre = h3.get_text(" ", strip=True) if h3 else "SIN NOMBRE"
+        # ─ Nombre ───────────────────────────────────────────────
+        name_tag = card.find("h3")
+        nombre = name_tag.get_text(" ", strip=True) if name_tag else "SIN NOMBRE"
 
-        # ─── Ubicación (municipio) ─────────────────────────────
+        # ─ Ubicación ────────────────────────────────────────────
         loc_tag = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
         ubic_raw = loc_tag.get_text(" ", strip=True) if loc_tag else ""
-        municipio = _norm(ubic_raw.split(".")[0])          # texto antes del punto
+        #   Cortamos en el primer separador (.,·,-,|)
+        municipio_raw = re.split(r"[.\-·|]", ubic_raw, maxsplit=1)[0]
+        municipio_norm = _norm(municipio_raw)
 
-        if not any(_norm(l) == municipio for l in LOCALIZACIONES_DESEADAS):
-            continue  # descarta si no está en tu lista
+        #   ¿está en la lista de deseos?
+        if not any(_norm(loc) in municipio_norm for loc in LOCALIZACIONES_DESEADAS):
+            continue
 
-        # ─── Enlace ────────────────────────────────────────────
+        # ─ Enlace ───────────────────────────────────────────────
         link = card.select_one("a.cont[href]")
         url_promo = link["href"] if link else LISTADO_URL
 
-        # ─── “Nuevo proyecto” flag ────────────────────────────
+        # ─ “Nuevo proyecto” flag ───────────────────────────────
         badge = card.find("span", class_=re.compile("badge"))
         es_nuevo = badge and "nuevo proyecto" in badge.get_text(strip=True).lower()
 
-        # ─── Dormitorios ──────────────────────────────────────
-        dorms_attr = card.get("data-numhabitaciones")
-        dormitorios = limpiar_y_convertir_a_numero(dorms_attr)
+        # ─ Dormitorios (atributo data-numhabitaciones) ─────────
+        dormitorios = limpiar_y_convertir_a_numero(card.get("data-numhabitaciones"))
 
         if es_nuevo:
             resultados.append(
                 f"\n*{nombre} (Ática – Nuevo proyecto)*"
-                f"\n📍 {ubic_raw.title()}"
+                f"\n📍 {municipio_raw.title()}"
                 f"\n🔗 [Ver promoción]({url_promo})"
             )
             continue
 
-        # ─── Filtrado por dormitorios (precios ya ≤ 270 000) ──
         if dormitorios is not None and dormitorios < HABITACIONES_MINIMAS:
-            continue
+            continue  # precios ya están ≤ 270 000 € gracias al filtro de la URL
 
         resultados.append(
             f"\n*{nombre} (Ática)*"
-            f"\n📍 {ubic_raw.title()}"
+            f"\n📍 {municipio_raw.title()}"
             f"\n🛏️ Dorms: {dormitorios if dormitorios else '—'}"
             f"\n🔗 [Ver promoción]({url_promo})"
         )
 
-        time.sleep(0.4)  # pequeña pausa
+        time.sleep(0.35)  # pausa suave para no saturar
 
     print(f"[DEBUG] ÁTICA filtradas → {len(resultados)}", flush=True)
     return resultados
