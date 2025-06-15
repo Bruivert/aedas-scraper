@@ -1,8 +1,13 @@
 # scrapers/atica.py
 # ───────────────────────────────────────────────────────────────
-import re, sys, time, unicodedata
+import re
+import sys
+import time
+import unicodedata
+
 import cloudscraper
 from bs4 import BeautifulSoup
+
 from utils import (
     HEADERS,
     LOCALIZACIONES_DESEADAS,
@@ -19,26 +24,35 @@ LISTADO_URL = (
     "&price=0%2C270000"
 )
 
+
 # ── helpers ────────────────────────────────────────────────────
-def _norm(s: str) -> str:
+def _norm(texto: str) -> str:
+    """Minúsculas sin tildes ni espacios extremos."""
     return (
-        unicodedata.normalize("NFKD", s)
+        unicodedata.normalize("NFKD", texto)
         .encode("ascii", "ignore")
         .decode()
         .lower()
         .strip()
     )
 
-def _municipio(ubic: str) -> str:
-    sin_prov = re.sub(r"\bvalencia\b", "", ubic, flags=re.I)
-    limpio   = re.sub(r"[.\-·|]", " ", sin_prov)
-    limpio   = re.sub(r"\s+", " ", limpio)
+
+def _municipio(cadena_ubic: str) -> str:
+    """
+    Devuelve el municipio sin la palabra 'valencia' ni separadores
+    '.', '·', '-', '|'.
+    """
+    sin_prov = re.sub(r"\bvalencia\b", "", cadena_ubic, flags=re.I)
+    limpio = re.sub(r"[.\-·|]", " ", sin_prov)
+    limpio = re.sub(r"\s+", " ", limpio)
     return _norm(limpio)
+
 
 def _precio_desde_card(card: BeautifulSoup) -> int | None:
     """Devuelve el primer número seguido de ‘€’ dentro de la tarjeta."""
     m = re.search(r"\d[\d.]*\s*€", card.get_text(" ", strip=True))
     return limpiar_y_convertir_a_numero(m.group(0)) if m else None
+
 
 # ── scraper ────────────────────────────────────────────────────
 def scrape() -> list[str]:
@@ -51,44 +65,45 @@ def scrape() -> list[str]:
         print(f"⚠️  Ática: error al descargar la página → {exc}", file=sys.stderr)
         return []
 
-    soup  = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(html, "html.parser")
     cards = soup.select("div.item-vivienda")
     print(f"[DEBUG] ÁTICA → {len(cards)} tarjetas totales", flush=True)
 
-    resultados = []
+    resultados: list[str] = []
 
     for card in cards:
-        # ─ Nombre ───────────────────────────────────────────────
+        # ─ Nombre ─────────────────────────────────────────────
         h3 = card.find("h3")
         nombre = h3.get_text(" ", strip=True) if h3 else "SIN NOMBRE"
 
-        # ─ Ubicación (municipio) ────────────────────────────────
-        loc_tag   = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
+        # ─ Ubicación ─────────────────────────────────────────
+        loc_tag = card.find("div", class_=re.compile(r"\bcol-md-7\b"))
         ubic_raw = loc_tag.get_text(" ", strip=True) if loc_tag else ""
-ubic_raw = re.sub(r"^[\s.\-·|]+", "", ubic_raw)   # quita separadores iniciales
         municipio = _municipio(ubic_raw)
 
-        if not any(_norm(loc) in municipio for loc in LOCALIZACIONES_DESEADAS):
+        if not any(_norm(l) in municipio for l in LOCALIZACIONES_DESEADAS):
             continue
 
-        # ─ Enlace ───────────────────────────────────────────────
+        # ─ Enlace ────────────────────────────────────────────
         link = card.select_one("a.cont[href]")
         url_promo = link["href"] if link else LISTADO_URL
 
-        # ─ “Nuevo proyecto” flag ───────────────────────────────
+        # ─ Indicador “Nuevo proyecto” ───────────────────────
         badge = card.find("span", class_=re.compile("badge"))
         es_nuevo = badge and "nuevo proyecto" in badge.get_text(strip=True).lower()
 
-        # ─ Dormitorios ──────────────────────────────────────────
+        # ─ Dormitorios ──────────────────────────────────────
         dormitorios = limpiar_y_convertir_a_numero(card.get("data-numhabitaciones"))
         if dormitorios is None:
             hab_tag = card.find("span", class_=re.compile("habitaciones", re.I))
-            dormitorios = limpiar_y_convertir_a_numero(hab_tag.get_text() if hab_tag else None)
+            dormitorios = limpiar_y_convertir_a_numero(
+                hab_tag.get_text() if hab_tag else None
+            )
 
-        # ─ Precio ───────────────────────────────────────────────
+        # ─ Precio ───────────────────────────────────────────
         precio = _precio_desde_card(card)
 
-        # ─ Bloque “Nuevo proyecto” ──────────────────────────────
+        # ─ Tarjetas “Nuevo proyecto” ────────────────────────
         if es_nuevo:
             resultados.append(
                 f"\n*{nombre} (Ática – Nuevo proyecto)*"
@@ -97,10 +112,12 @@ ubic_raw = re.sub(r"^[\s.\-·|]+", "", ubic_raw)   # quita separadores iniciales
             )
             continue
 
-        # ─ Filtros en venta ─────────────────────────────────────
-        if precio is None or precio > PRECIO_MAXIMO:
-            continue
-        if dormitorios is not None and dormitorios < HABITACIONES_MINIMAS:
+        # ─ Filtros en venta ─────────────────────────────────
+        if (
+            precio is None
+            or precio > PRECIO_MAXIMO
+            or (dormitorios is not None and dormitorios < HABITACIONES_MINIMAS)
+        ):
             continue
 
         resultados.append(
