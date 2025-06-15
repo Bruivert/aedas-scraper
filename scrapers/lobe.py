@@ -13,7 +13,7 @@ import re, time, unicodedata, requests
 from bs4 import BeautifulSoup
 from utils import HEADERS, LOCALIZACIONES_DESEADAS
 
-URL = "https://www.grupolobe.com/promociones"
+URL = "https://www.grupolobe.com/pisos-obra-nueva-valencia/"
 
 def _norm(txt: str) -> str:
     """Minúsculas sin tildes ni espacios extremos."""
