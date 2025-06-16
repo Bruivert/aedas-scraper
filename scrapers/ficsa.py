@@ -1,105 +1,58 @@
-# scrapers/ficsa.py
-# ───────────────────────────────────────────────────────────────
-"""
-Scraper FICSA
-– Descarga las tarjetas de promociones mediante las llamadas Ajax
-  que usa el scroll infinito de la página:
-     https://www.ficsa.es/promociones-valencia
-– Extrae nombre, localización y enlace de cada promoción.
-– Filtra por LOCALIZACIONES_DESEADAS (utils.py).
-"""
-
-import re
-import sys
-import time
-import unicodedata
-
-import requests
+from __future__ import annotations
+import re, sys, time, unicodedata, requests
 from bs4 import BeautifulSoup
-
 from utils import HEADERS, LOCALIZACIONES_DESEADAS
 
-# Ajax endpoint usado por la web
+LIST_URL = "https://www.ficsa.es/promociones-valencia"
 AJAX_URL = "https://www.ficsa.es/wp-admin/admin-ajax.php"
-REFERER  = "https://www.ficsa.es/promociones-valencia"
 
+def _norm(txt: str) -> str:
+    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode().lower().strip()
 
-# ── helpers ────────────────────────────────────────────────────
-def _norm(texto: str) -> str:
-    """Normaliza texto: minúsculas + sin acentos + sin espacios extremos."""
-    return (
-        unicodedata.normalize("NFKD", texto)
-        .encode("ascii", "ignore")
-        .decode()
-        .lower()
-        .strip()
-    )
+def _get_nonce() -> str | None:
+    """Descarga la página principal y devuelve el data-nonce del botón 'Ver más'."""
+    html = requests.get(LIST_URL, headers=HEADERS, timeout=30).text
+    m = re.search(r'id="more_posts_ajax"[^>]*data-nonce="([^"]+)"', html)
+    return m.group(1) if m else None
 
+def _ajax_page(page: int, nonce: str) -> str:
+    payload = {"action": "more_post_ajax", "paged": str(page), "nonce": nonce}
+    hdrs = {**HEADERS,
+            "Referer": LIST_URL,
+            "X-Requested-With": "XMLHttpRequest"}
+    r = requests.post(AJAX_URL, data=payload, headers=hdrs, timeout=30)
+    r.raise_for_status()
+    return r.text
 
-def _ajax_page(page: int) -> str:
-    """
-    Devuelve el HTML de la página 'page' del scroll infinito.
-    Añade las cabeceras que exige el servidor (Referer + X-Requested-With).
-    """
-    payload = {"action": "more_post_ajax", "paged": str(page)}
-    ajax_headers = {
-        **HEADERS,
-        "Referer": REFERER,
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    resp = requests.post(
-        AJAX_URL,
-        data=payload,
-        headers=ajax_headers,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.text
-
-
-# ── scraper principal ─────────────────────────────────────────
 def scrape() -> list[str]:
-    bloques_html: list[str] = []
-    page = 1
+    nonce = _get_nonce()
+    if not nonce:
+        print("⚠️  FICSA: no se encontró nonce; aborto", file=sys.stderr)
+        return []
 
-    # Paso 1-2: descargar todas las páginas Ajax
-    try:
-        while True:
-            chunk = _ajax_page(page)
-            if not chunk.strip():        # respuesta vacía ⇒ fin
-                break
-            bloques_html.append(chunk)
-            page += 1
-            time.sleep(0.4)              # pequeña pausa
-    except Exception as exc:
-        print(f"⚠️  FICSA Ajax error → {exc}", file=sys.stderr)
+    bloques, page = [], 1
+    while True:
+        chunk = _ajax_page(page, nonce)
+        if not chunk.strip():
+            break
+        bloques.append(chunk)
+        page += 1
+        time.sleep(0.4)
 
-    print(f"[DEBUG] FICSA Ajax pages → {len(bloques_html)}", flush=True)
+    print(f"[DEBUG] FICSA Ajax pages → {len(bloques)}", flush=True)
 
     resultados: list[str] = []
-
-    # Paso 3-6: parsear tarjetas, filtrar y formatear Markdown
-    for chunk in bloques_html:
-        soup = BeautifulSoup(chunk, "html.parser")
+    for html in bloques:
+        soup = BeautifulSoup(html, "html.parser")
         for card in soup.select("div.tilter"):
-            name_tag = card.find("h3", class_="tilter__title")
-            loc_tag  = card.find("p",  class_="tilter__description")
-            nombre = name_tag.get_text(" ", strip=True) if name_tag else ""
-            ubic   = loc_tag.get_text(" ", strip=True) if loc_tag else ""
-            if (
-                not nombre
-                or not ubic
-                or not any(_norm(l) in _norm(ubic) for l in LOCALIZACIONES_DESEADAS)
-            ):
+            nombre = (card.find("h3", class_="tilter__title") or "").get_text(" ", strip=True)
+            ubic   = (card.find("p", class_="tilter__description") or "").get_text(" ", strip=True)
+            if not nombre or not ubic:
                 continue
-
+            if not any(_norm(l) in _norm(ubic) for l in LOCALIZACIONES_DESEADAS):
+                continue
             a = card.find("a", href=True)
-            url = (
-                "https://www.ficsa.es" + a["href"]
-                if a and a["href"].startswith("/")
-                else (a["href"] if a else REFERER)
-            )
-
+            url = ("https://www.ficsa.es"+a["href"]) if a and a["href"].startswith("/") else (a["href"] if a else LIST_URL)
             resultados.append(
                 f"\n*{nombre} (FICSA)*"
                 f"\n📍 {ubic.title()}"
@@ -107,6 +60,5 @@ def scrape() -> list[str]:
             )
             time.sleep(0.1)
 
-    # Paso 7: devolver lista de bloques Markdown
     print(f"[DEBUG] FICSA filtradas → {len(resultados)}", flush=True)
     return resultados
