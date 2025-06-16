@@ -1,4 +1,14 @@
-from . import aedas, viacelere, metrovacesa, atica, urbania, albaluz, lobe, ficsa
+# scrapers/__init__.py
+from . import (
+    aedas,
+    viacelere,
+    metrovacesa,
+    atica,
+    urbania,
+    albaluz,
+    lobe,
+    ficsa,
+)
 
 __all__ = [
     "aedas",
@@ -10,5 +20,3 @@ __all__ = [
     "lobe",
     "ficsa",
 ]
-…
-+ ficsa.scrape()
