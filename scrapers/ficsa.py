@@ -2,25 +2,12 @@
 # ───────────────────────────────────────────────────────────────
 """
 Scraper FICSA
-
-• Origen de datos: scroll infinito de la página
-  https://www.ficsa.es/promociones-valencia
-
-  Internamente llama a:
-    POST https://www.ficsa.es/wp-admin/admin-ajax.php
-         action=more_post_ajax&paged=1 (2, 3, …)
-
-  El endpoint sólo responde si se incluyen los encabezados:
-      Referer: https://www.ficsa.es/promociones-valencia
-      X-Requested-With: XMLHttpRequest
-
-• Cada bloque HTML devuelto contiene div.tilter con:
-      <h3 class="tilter__title">NOMBRE</h3>
-      <p  class="tilter__description">LOCALIZACIÓN</p>
-
-  No hay precio ni dormitorios: filtramos sólo por localidad.
+– Descarga las tarjetas de promociones mediante las llamadas Ajax
+  que usa el scroll infinito de la página:
+     https://www.ficsa.es/promociones-valencia
+– Extrae nombre, localización y enlace de cada promoción.
+– Filtra por LOCALIZACIONES_DESEADAS (utils.py).
 """
-from __future__ import annotations
 
 import re
 import sys
@@ -32,13 +19,14 @@ from bs4 import BeautifulSoup
 
 from utils import HEADERS, LOCALIZACIONES_DESEADAS
 
+# Ajax endpoint usado por la web
 AJAX_URL = "https://www.ficsa.es/wp-admin/admin-ajax.php"
 REFERER  = "https://www.ficsa.es/promociones-valencia"
 
 
 # ── helpers ────────────────────────────────────────────────────
 def _norm(texto: str) -> str:
-    """Minúsculas sin tildes ni espacios extremos para comparar."""
+    """Normaliza texto: minúsculas + sin acentos + sin espacios extremos."""
     return (
         unicodedata.normalize("NFKD", texto)
         .encode("ascii", "ignore")
@@ -49,14 +37,22 @@ def _norm(texto: str) -> str:
 
 
 def _ajax_page(page: int) -> str:
-    """Devuelve el HTML de la página 'page' (o cadena vacía si ya no hay más)."""
-    data = {"action": "more_post_ajax", "paged": str(page)}
+    """
+    Devuelve el HTML de la página 'page' del scroll infinito.
+    Añade las cabeceras que exige el servidor (Referer + X-Requested-With).
+    """
+    payload = {"action": "more_post_ajax", "paged": str(page)}
     ajax_headers = {
         **HEADERS,
         "Referer": REFERER,
         "X-Requested-With": "XMLHttpRequest",
     }
-    resp = requests.post(AJAX_URL, data=data, headers=ajax_headers, timeout=30)
+    resp = requests.post(
+        AJAX_URL,
+        data=payload,
+        headers=ajax_headers,
+        timeout=30,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -66,37 +62,30 @@ def scrape() -> list[str]:
     bloques_html: list[str] = []
     page = 1
 
+    # Paso 1-2: descargar todas las páginas Ajax
     try:
         while True:
             chunk = _ajax_page(page)
-            if not chunk.strip():
+            if not chunk.strip():        # respuesta vacía ⇒ fin
                 break
             bloques_html.append(chunk)
             page += 1
-            time.sleep(0.4)  # pausa para no saturar
-    except Exception as exc:  # red, timeout, 4xx
+            time.sleep(0.4)              # pequeña pausa
+    except Exception as exc:
         print(f"⚠️  FICSA Ajax error → {exc}", file=sys.stderr)
 
     print(f"[DEBUG] FICSA Ajax pages → {len(bloques_html)}", flush=True)
 
     resultados: list[str] = []
 
+    # Paso 3-6: parsear tarjetas, filtrar y formatear Markdown
     for chunk in bloques_html:
         soup = BeautifulSoup(chunk, "html.parser")
         for card in soup.select("div.tilter"):
-            nombre = (
-                card.find("h3", class_="tilter__title")
-                .get_text(" ", strip=True)
-                if card.find("h3", class_="tilter__title")
-                else ""
-            )
-            ubic = (
-                card.find("p", class_="tilter__description")
-                .get_text(" ", strip=True)
-                if card.find("p", class_="tilter__description")
-                else ""
-            )
-
+            name_tag = card.find("h3", class_="tilter__title")
+            loc_tag  = card.find("p",  class_="tilter__description")
+            nombre = name_tag.get_text(" ", strip=True) if name_tag else ""
+            ubic   = loc_tag.get_text(" ", strip=True) if loc_tag else ""
             if (
                 not nombre
                 or not ubic
@@ -118,5 +107,6 @@ def scrape() -> list[str]:
             )
             time.sleep(0.1)
 
+    # Paso 7: devolver lista de bloques Markdown
     print(f"[DEBUG] FICSA filtradas → {len(resultados)}", flush=True)
     return resultados
