@@ -2,13 +2,6 @@
 # ──────────────────────────────────────────────────────────────
 """
 Scraper FICSA via WordPress REST API
-
-Endpoint:
-  https://www.ficsa.es/wp-json/wp/v2/promociones?per_page=100
-Campos clave por promo (JSON):
-  • title.rendered            → Nombre
-  • acf.localizacion          → Ej. "Av Constitución 191 · VALENCIA"
-  • link                      → URL de la ficha
 Filtra solo por LOCALIZACIONES_DESEADAS.
 """
 import time, unicodedata, requests
@@ -26,17 +19,25 @@ def _norm(txt: str) -> str:
     )
 
 def scrape() -> list[str]:
-    promos = requests.get(API, headers=HEADERS, timeout=30).json()
-    print(f"[DEBUG] FICSA API → {len(promos)} promos", flush=True)
+    try:
+        promos = requests.get(API, headers=HEADERS, timeout=30).json()
+    except Exception as exc:
+        print(f"⚠️  FICSA: error API → {exc}")
+        return []
+
+    print(f"[DEBUG] FICSA API → {len(promos)} items", flush=True)
 
     resultados = []
     for p in promos:
-        nombre = p["title"]["rendered"].strip()
-        ubic   = (p.get("acf", {}).get("localizacion") or "").strip()
+        if not isinstance(p, dict):          # ← ① salta elementos que no son dict
+            continue
+
+        nombre = (p.get("title") or {}).get("rendered", "").strip()
+        ubic   = (p.get("acf") or {}).get("localizacion", "").strip()
         if not nombre or not ubic:
             continue
 
-        if not any(_norm(loc) in _norm(ubic) for loc in LOCALIZACIONES_DESEADAS):
+        if not any(_norm(l) in _norm(ubic) for l in LOCALIZACIONES_DESEADAS):
             continue
 
         url = p.get("link") or "https://www.ficsa.es/"
