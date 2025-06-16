@@ -8,4 +8,5 @@ __all__ = [
     "urbania",
     "albaluz",
     "lobe",
+    "ficsa",
 ]
