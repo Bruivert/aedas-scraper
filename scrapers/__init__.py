@@ -1,4 +1,4 @@
-from . import aedas, viacelere, metrovacesa, atica, urbania, albaluz
+from . import aedas, viacelere, metrovacesa, atica, urbania, albaluz, lobe, ficsa
 
 __all__ = [
     "aedas",
