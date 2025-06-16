@@ -2,103 +2,83 @@
 # ───────────────────────────────────────────────────────────────
 """
 Scraper FICSA
-
-Página pública .......... https://www.ficsa.es/promociones-valencia
-Ajax interno ............ POST https://www.ficsa.es/wp-admin/admin-ajax.php
-                          parámetros: action=more_post_ajax, paged, nonce
-
-Datos que se extraen por promoción:
-  • Nombre        (h3.tilter__title)
-  • Localización  (p.tilter__description)
-  • Enlace        (href del <a> que envuelve la tarjeta)
-
-Solo se conservan las promociones cuya localización contenga
-alguna de las localidades definidas en utils.LOCALIZACIONES_DESEADAS.
+• Obtiene el token nonce (necesario para Ajax) probando con
+  https://www.ficsa.es/promociones-valencia   y, si falla, sin subdominio.
+• Descarga todas las páginas Ajax (scroll infinito).
+• Extrae nombre, localización y enlace de cada tarjeta <div class="tilter">.
+• Filtra sólo las promociones cuya localización contenga alguna ciudad
+  definida en utils.LOCALIZACIONES_DESEADAS.
 """
 
 from __future__ import annotations
-
-import re
-import sys
-import time
-import unicodedata
-
-import requests
+import re, sys, time, unicodedata, requests
 from bs4 import BeautifulSoup
-
 from utils import HEADERS, LOCALIZACIONES_DESEADAS
 
-# --- URLs base -------------------------------------------------
-LIST_URL = "https://www.ficsa.es/promociones-valencia"
-AJAX_URL = "https://www.ficsa.es/wp-admin/admin-ajax.php"
+# ————————————————————————————————————————————————————————
+URLS_BASE = (
+    "https://www.ficsa.es/promociones-valencia",  # preferido
+    "https://ficsa.es/promociones-valencia",       # respaldo
+)
+AJAX_PATH = "/wp-admin/admin-ajax.php"
 
-
-# --- helpers ---------------------------------------------------
-def _norm(txt: str) -> str:
-    """minúsculas + sin acentos + sin espacios extremos"""
+# ————————————————————————————————————————————————————————
+def _norm(texto: str) -> str:
     return (
-        unicodedata.normalize("NFKD", txt)
+        unicodedata.normalize("NFKD", texto)
         .encode("ascii", "ignore")
         .decode()
         .lower()
         .strip()
     )
 
-
-def _get_nonce() -> str | None:
+def _get_nonce() -> tuple[str, str] | None:
     """
-    Busca el token 'nonce' necesario para la petición Ajax.
-    1) data-nonce del botón #more_posts_ajax
-    2) variable JS   var ficsa_ajax = { "nonce":"XXXX" }
+    Devuelve (nonce, dominio_base). Prueba con www y sin www.
+    Busca el token tanto en data-nonce del botón como en el bloque JS.
     """
-    resp = requests.get(LIST_URL, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    html = resp.text
+    for listado in URLS_BASE:
+        try:
+            html = requests.get(listado, headers=HEADERS, timeout=30).text
+        except requests.HTTPError:
+            continue
 
-    # A) atributo data-nonce
-    m = re.search(
-        r'id=["\']more_posts_ajax["\'][^>]*data-nonce="([^"]+)"', html, re.I
-    )
-    if m:
-        return m.group(1)
-
-    # B) bloque <script> con ficsa_ajax.nonce
-    m = re.search(r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"', html)
-    if m:
-        return m.group(1)
-
+        m = re.search(r'id=["\']more_posts_ajax["\'][^>]*data-nonce="([^"]+)"', html, re.I)
+        if not m:
+            m = re.search(r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"', html)
+        if m:
+            nonce = m.group(1)
+            dominio = listado.split("/promociones-")[0]  # https://www.ficsa.es
+            return nonce, dominio
     return None
 
-
-def _ajax_page(page: int, nonce: str) -> str:
-    """Devuelve el HTML de la página `paged=page` del scroll infinito."""
+def _ajax_page(page: int, nonce: str, dominio: str) -> str:
     payload = {"action": "more_post_ajax", "paged": str(page), "nonce": nonce}
-    hdrs = {
-        **HEADERS,
-        "Referer": LIST_URL,
-        "X-Requested-With": "XMLHttpRequest",
-    }
-    r = requests.post(AJAX_URL, data=payload, headers=hdrs, timeout=30)
-    r.raise_for_status()
-    return r.text
+    hdrs = {**HEADERS,
+            "Referer": f"{dominio}/promociones-valencia",
+            "X-Requested-With": "XMLHttpRequest"}
+    resp = requests.post(f"{dominio}{AJAX_PATH}", data=payload, headers=hdrs, timeout=30)
+    resp.raise_for_status()
+    return resp.text
 
-
-# --- scraper principal ----------------------------------------
+# ————————————————————————————————————————————————————————
 def scrape() -> list[str]:
-    nonce = _get_nonce()
-    if not nonce:
-        print("⚠️  FICSA: nonce no encontrado – abortando", file=sys.stderr)
+    datos_nonce = _get_nonce()
+    if not datos_nonce:
+        print("⚠️  FICSA: no se pudo obtener nonce", file=sys.stderr)
         return []
+    nonce, dominio = datos_nonce
 
-    bloques_html: list[str] = []
+    # Descargar bloques Ajax
+    bloques_html = []
     page = 1
     while True:
-        chunk = _ajax_page(page, nonce)
-        if not chunk.strip():  # sin más resultados
+        chunk = _ajax_page(page, nonce, dominio)
+        if not chunk.strip():
             break
         bloques_html.append(chunk)
         page += 1
-        time.sleep(0.4)        # pausa para no saturar
+        time.sleep(0.4)
 
     print(f"[DEBUG] FICSA Ajax pages → {len(bloques_html)}", flush=True)
 
@@ -110,19 +90,17 @@ def scrape() -> list[str]:
             loc_tag  = card.find("p",  class_="tilter__description")
             if not (name_tag and loc_tag):
                 continue
-
             nombre = name_tag.get_text(" ", strip=True)
             ubic   = loc_tag.get_text(" ", strip=True)
 
-            # Filtrado por localidad
-            if not any(_norm(city) in _norm(ubic) for city in LOCALIZACIONES_DESEADAS):
+            if not any(_norm(c) in _norm(ubic) for c in LOCALIZACIONES_DESEADAS):
                 continue
 
             a = card.find("a", href=True)
             url = (
-                "https://www.ficsa.es" + a["href"]
+                f"{dominio}{a['href']}"
                 if a and a["href"].startswith("/")
-                else (a["href"] if a else LIST_URL)
+                else (a["href"] if a else f"{dominio}/promociones-valencia")
             )
 
             resultados.append(
