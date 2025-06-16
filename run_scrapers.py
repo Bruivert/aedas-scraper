@@ -11,6 +11,7 @@ from scrapers import (
     urbania,
     albaluz,
     lobe,
+    ficsa,
 )
 from utils import enviar_mensaje_telegram
 
@@ -24,7 +25,8 @@ def main() -> None:
     res_urbania     = urbania.scrape()
     res_albaluz     = albaluz.scrape()
     res_lobe        = lobe.scrape()
-
+    res_ficsa       = ficsa.scrape()
+    
     # ─── Traza de control en el log ─────────────────────────────────────
     print(f"[DEBUG] AEDAS        → {len(res_aedas)} promociones filtradas", flush=True)
     print(f"[DEBUG] VÍA CÉLERE   → {len(res_viacelere)} promociones filtradas", flush=True)
@@ -33,9 +35,10 @@ def main() -> None:
     print(f"[DEBUG] URBANIA        → {len(res_urbania)} promociones filtradas", flush=True)
     print(f"[DEBUG] ALBALUZ        → {len(res_albaluz)} promociones filtradas", flush=True)
     print(f"[DEBUG] GRUPO LOBE        → {len(res_lobe)} promociones filtradas", flush=True)
+    print(f"[DEBUG] FICSA        → {len(res_ficsa)} promociones filtradas", flush=True)
 
     # ─── Une todos los resultados ───────────────────────────────────────
-    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania + res_albaluz + res_lobe
+    resultados = res_aedas + res_viacelere + res_metrovacesa + res_atica + res_urbania + res_albaluz + res_lobe + res_ficsa
 
     if resultados:
         mensaje = (
