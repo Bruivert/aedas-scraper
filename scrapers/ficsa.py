@@ -1,144 +1,119 @@
 # scrapers/ficsa.py
 # ───────────────────────────────────────────────────────────────
 """
-Scraper FICSA
-
-• Origen de la lista:  https://www.ficsa.es/promociones-valencia
-  (si la versión sin «www» devuelve 404, se prueba la de «www»).
-
-• La página carga las tarjetas con Ajax:
-      POST /wp-admin/admin-ajax.php
-         action = more_post_ajax
-         paged  = 1, 2, 3…
-         nonce  = TOKEN                       ← obligatorio
-
-  El token «nonce» aparece siempre en el HTML:
-     a) como data-nonce="XXXX"
-     b) o dentro de un bloque JS "nonce":"XXXX"
-
-• Se extraen de cada tarjeta <div class="tilter">
-     – Nombre (h3.tilter__title)
-     – Localización (p.tilter__description)
-     – Enlace (href del <a>)
-  y se filtra por las localidades definidas en utils.LOCALIZACIONES_DESEADAS.
+Scraper FICSA (dos saltos)
+  1) https://www.ficsa.es/promociones/
+     → recoge todos los enlaces /promociones/<slug>/
+  2) entra en cada URL y extrae nombre, localización, precio 'Desde', dormitorios.
+  3) filtra por LOCALIZACIONES_DESEADAS, PRECIO_MAXIMO, HABITACIONES_MINIMAS.
 """
 
 from __future__ import annotations
-import re, sys, time, unicodedata
-
-import requests
+import html, re, time, unicodedata, requests
 from bs4 import BeautifulSoup
+from utils import (
+    HEADERS,
+    LOCALIZACIONES_DESEADAS,
+    PRECIO_MAXIMO,
+    HABITACIONES_MINIMAS,
+)
 
-from utils import HEADERS, LOCALIZACIONES_DESEADAS
-
-AJAX_PATH = "/wp-admin/admin-ajax.php"
-
+LIST_URL = "https://www.ficsa.es/promociones/"
 
 # ───────────────────────────────────────── helpers ─────────────
 def _norm(txt: str) -> str:
-    """minúsculas sin acentos ni espacios extremos"""
-    return (
-        unicodedata.normalize("NFKD", txt)
-        .encode("ascii", "ignore")
-        .decode()
-        .lower()
-        .strip()
-    )
+    return unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode().lower()
 
+def _clean_html(raw: str) -> str:
+    txt = html.unescape(raw)
+    return re.sub(r"<[^>]+>", " ", txt)
 
-def _get_nonce() -> tuple[str, str] | None:
-    """
-    Devuelve (nonce, dominio_base).
-    ▸ Prueba primero con https://www.ficsa.es/promociones-valencia
-      y si recibe 404 prueba https://ficsa.es/promociones-valencia
-    ▸ Busca:
-        • cualquier data-nonce="XXXX"
-        • o "nonce":"XXXX" dentro de un <script>
-    """
-    for listado in (
-        "https://www.ficsa.es/promociones-valencia",
-        "https://ficsa.es/promociones-valencia",
-    ):
-        try:
-            html = requests.get(listado, headers=HEADERS, timeout=30).text
-        except requests.RequestException:
-            continue   # intenta con el siguiente dominio
+def _extract_number(txt: str) -> int | None:
+    m = re.search(r"\d[\d.]*", txt)
+    return int(m.group(0).replace(".", "")) if m else None
 
-        #   a) data-nonce="…"
-        m = re.search(r'data-nonce\s*=\s*"([a-zA-Z0-9]+)"', html)
-        if not m:
-            #   b) "nonce":"…"
-            m = re.search(r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"', html)
+# ───────────────────────────────────────── paso A ──────────────
+def _get_promo_links() -> list[str]:
+    soup = BeautifulSoup(requests.get(LIST_URL, headers=HEADERS, timeout=30).text, "html.parser")
+    links = []
+    for a in soup.select("a[href*='/promociones/']"):
+        href = a["href"]
+        if href.endswith("/promociones/"):
+            continue  # la página de listado
+        links.append(href if href.startswith("http") else f"https://www.ficsa.es{href}")
+    return list(dict.fromkeys(links))  # quita duplicados
 
-        if m:
-            dominio = listado.split("/promociones-")[0]   # «https://www.ficsa.es»
-            return m.group(1), dominio
-    return None
+# ───────────────────────────────────────── paso B ──────────────
+def _parse_promotion(url: str) -> dict | None:
+    try:
+        soup = BeautifulSoup(requests.get(url, headers=HEADERS, timeout=30).text, "html.parser")
+    except requests.RequestException:
+        return None
 
+    # Nombre
+    h = soup.find(["h1", "h2"])
+    nombre = h.get_text(" ", strip=True) if h else None
 
-def _ajax_page(page: int, nonce: str, dominio: str) -> str:
-    payload = {"action": "more_post_ajax", "paged": str(page), "nonce": nonce}
-    hdrs = {
-        **HEADERS,
-        "Referer": f"{dominio}/promociones-valencia",
-        "X-Requested-With": "XMLHttpRequest",
+    # Localización (primer texto con 'Valencia', 'Mislata', etc.)
+    ubic = ""
+    for tag in soup.find_all(text=re.compile(r"valenc", re.I)):
+        ubic = tag.strip()
+        if ubic:
+            break
+
+    # Precio mínimo
+    price_txt = soup.find(text=re.compile(r"desde\s+\d", re.I))
+    precio = _extract_number(price_txt) if price_txt else None
+
+    # Dormitorios (mínimo mencionado)
+    dorm_txt = soup.find(text=re.compile(r"dormitorio", re.I))
+    dormitorios = None
+    if dorm_txt:
+        nums = [int(n) for n in re.findall(r"\d+", dorm_txt)]
+        dormitorios = min(nums) if nums else None
+
+    return {
+        "nombre": nombre,
+        "ubic": ubic,
+        "precio": precio,
+        "dorms": dormitorios,
+        "url": url,
     }
-    resp = requests.post(f"{dominio}{AJAX_PATH}", data=payload, headers=hdrs, timeout=30)
-    resp.raise_for_status()
-    return resp.text
-
 
 # ───────────────────────────────────────── scraper ─────────────
 def scrape() -> list[str]:
-    datos = _get_nonce()
-    if not datos:
-        print("⚠️  FICSA: no se pudo obtener nonce", file=sys.stderr)
-        return []
-    nonce, dominio = datos
+    mensajes = []
+    enlaces = _get_promo_links()
+    print(f"[DEBUG] FICSA lista → {len(enlaces)} enlaces", flush=True)
 
-    # 1. Descargar todos los bloques Ajax
-    bloques_html: list[str] = []
-    page = 1
-    while True:
-        chunk = _ajax_page(page, nonce, dominio)
-        if not chunk.strip():
-            break
-        bloques_html.append(chunk)
-        page += 1
-        time.sleep(0.4)   # pausa suave para no saturar
+    for link in enlaces:
+        datos = _parse_promotion(link)
+        if not datos or not datos["nombre"]:
+            continue
 
-    print(f"[DEBUG] FICSA Ajax pages → {len(bloques_html)}", flush=True)
+        # Filtro por localidad
+        if not any(_norm(city) in _norm(datos["ubic"]) for city in LOCALIZACIONES_DESEADAS):
+            continue
+        # Filtro precio
+        if datos["precio"] and datos["precio"] > PRECIO_MAXIMO:
+            continue
+        # Filtro dormitorios
+        if datos["dorms"] and datos["dorms"] < HABITACIONES_MINIMAS:
+            continue
 
-    # 2. Parsear y filtrar
-    resultados: list[str] = []
-    for html in bloques_html:
-        soup = BeautifulSoup(html, "html.parser")
-        for card in soup.select("div.tilter"):
-            title = card.find("h3", class_="tilter__title")
-            desc  = card.find("p",  class_="tilter__description")
-            if not (title and desc):
-                continue
+        # Formatea Markdown
+        detalle = []
+        if datos["precio"]:
+            detalle.append(f"💶 Desde: {datos['precio']:,}€".replace(",", "."))
+        if datos["dorms"]:
+            detalle.append(f"🛏️ Dorms: {datos['dorms']}")
+        mensajes.append(
+            f"\n*{datos['nombre']} (FICSA)*"
+            f"\n📍 {datos['ubic'].title() if datos['ubic'] else ''}"
+            f"\n" + (" - ".join(detalle) if detalle else "")
+            f"\n🔗 [Ver promoción]({datos['url']})"
+        )
+        time.sleep(0.2)
 
-            nombre = title.get_text(" ", strip=True)
-            ubic   = desc.get_text(" ", strip=True)
-
-            # filtrado por localidades deseadas
-            if not any(_norm(city) in _norm(ubic) for city in LOCALIZACIONES_DESEADAS):
-                continue
-
-            a = card.find("a", href=True)
-            url = (
-                f"{dominio}{a['href']}"
-                if a and a["href"].startswith("/")
-                else (a["href"] if a else f"{dominio}/promociones-valencia")
-            )
-
-            resultados.append(
-                f"\n*{nombre} (FICSA)*"
-                f"\n📍 {ubic.title()}"
-                f"\n🔗 [Ver promoción]({url})"
-            )
-            time.sleep(0.1)
-
-    print(f"[DEBUG] FICSA filtradas → {len(resultados)}", flush=True)
-    return resultados
+    print(f"[DEBUG] FICSA filtradas → {len(mensajes)}", flush=True)
+    return mensajes
