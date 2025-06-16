@@ -2,75 +2,102 @@
 # ───────────────────────────────────────────────────────────────
 """
 Scraper FICSA
-• Obtiene el token nonce (necesario para Ajax) probando con
-  https://www.ficsa.es/promociones-valencia   y, si falla, sin subdominio.
-• Descarga todas las páginas Ajax (scroll infinito).
-• Extrae nombre, localización y enlace de cada tarjeta <div class="tilter">.
-• Filtra sólo las promociones cuya localización contenga alguna ciudad
-  definida en utils.LOCALIZACIONES_DESEADAS.
+
+• Origen de la lista:  https://www.ficsa.es/promociones-valencia
+  (si la versión sin «www» devuelve 404, se prueba la de «www»).
+
+• La página carga las tarjetas con Ajax:
+      POST /wp-admin/admin-ajax.php
+         action = more_post_ajax
+         paged  = 1, 2, 3…
+         nonce  = TOKEN                       ← obligatorio
+
+  El token «nonce» aparece siempre en el HTML:
+     a) como data-nonce="XXXX"
+     b) o dentro de un bloque JS "nonce":"XXXX"
+
+• Se extraen de cada tarjeta <div class="tilter">
+     – Nombre (h3.tilter__title)
+     – Localización (p.tilter__description)
+     – Enlace (href del <a>)
+  y se filtra por las localidades definidas en utils.LOCALIZACIONES_DESEADAS.
 """
 
 from __future__ import annotations
-import re, sys, time, unicodedata, requests
+import re, sys, time, unicodedata
+
+import requests
 from bs4 import BeautifulSoup
+
 from utils import HEADERS, LOCALIZACIONES_DESEADAS
 
-# ————————————————————————————————————————————————————————
-URLS_BASE = (
-    "https://www.ficsa.es/promociones-valencia",  # preferido
-    "https://ficsa.es/promociones-valencia",       # respaldo
-)
 AJAX_PATH = "/wp-admin/admin-ajax.php"
 
-# ————————————————————————————————————————————————————————
-def _norm(texto: str) -> str:
+
+# ───────────────────────────────────────── helpers ─────────────
+def _norm(txt: str) -> str:
+    """minúsculas sin acentos ni espacios extremos"""
     return (
-        unicodedata.normalize("NFKD", texto)
+        unicodedata.normalize("NFKD", txt)
         .encode("ascii", "ignore")
         .decode()
         .lower()
         .strip()
     )
 
+
 def _get_nonce() -> tuple[str, str] | None:
     """
-    Devuelve (nonce, dominio_base). Prueba con www y sin www.
-    Busca el token tanto en data-nonce del botón como en el bloque JS.
+    Devuelve (nonce, dominio_base).
+    ▸ Prueba primero con https://www.ficsa.es/promociones-valencia
+      y si recibe 404 prueba https://ficsa.es/promociones-valencia
+    ▸ Busca:
+        • cualquier data-nonce="XXXX"
+        • o "nonce":"XXXX" dentro de un <script>
     """
-    for listado in URLS_BASE:
+    for listado in (
+        "https://www.ficsa.es/promociones-valencia",
+        "https://ficsa.es/promociones-valencia",
+    ):
         try:
             html = requests.get(listado, headers=HEADERS, timeout=30).text
-        except requests.HTTPError:
-            continue
+        except requests.RequestException:
+            continue   # intenta con el siguiente dominio
 
-        m = re.search(r'id=["\']more_posts_ajax["\'][^>]*data-nonce="([^"]+)"', html, re.I)
+        #   a) data-nonce="…"
+        m = re.search(r'data-nonce\s*=\s*"([a-zA-Z0-9]+)"', html)
         if not m:
+            #   b) "nonce":"…"
             m = re.search(r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"', html)
+
         if m:
-            nonce = m.group(1)
-            dominio = listado.split("/promociones-")[0]  # https://www.ficsa.es
-            return nonce, dominio
+            dominio = listado.split("/promociones-")[0]   # «https://www.ficsa.es»
+            return m.group(1), dominio
     return None
+
 
 def _ajax_page(page: int, nonce: str, dominio: str) -> str:
     payload = {"action": "more_post_ajax", "paged": str(page), "nonce": nonce}
-    hdrs = {**HEADERS,
-            "Referer": f"{dominio}/promociones-valencia",
-            "X-Requested-With": "XMLHttpRequest"}
+    hdrs = {
+        **HEADERS,
+        "Referer": f"{dominio}/promociones-valencia",
+        "X-Requested-With": "XMLHttpRequest",
+    }
     resp = requests.post(f"{dominio}{AJAX_PATH}", data=payload, headers=hdrs, timeout=30)
     resp.raise_for_status()
     return resp.text
 
-# ————————————————————————————————————————————————————————
+
+# ───────────────────────────────────────── scraper ─────────────
 def scrape() -> list[str]:
-    datos_nonce = _get_nonce()
-    if not datos_nonce:
+    datos = _get_nonce()
+    if not datos:
         print("⚠️  FICSA: no se pudo obtener nonce", file=sys.stderr)
         return []
-    nonce, dominio = datos_nonce
+    nonce, dominio = datos
 
-    # Descargar bloques Ajax
-    bloques_html = []
+    # 1. Descargar todos los bloques Ajax
+    bloques_html: list[str] = []
     page = 1
     while True:
         chunk = _ajax_page(page, nonce, dominio)
@@ -78,22 +105,25 @@ def scrape() -> list[str]:
             break
         bloques_html.append(chunk)
         page += 1
-        time.sleep(0.4)
+        time.sleep(0.4)   # pausa suave para no saturar
 
     print(f"[DEBUG] FICSA Ajax pages → {len(bloques_html)}", flush=True)
 
+    # 2. Parsear y filtrar
     resultados: list[str] = []
     for html in bloques_html:
         soup = BeautifulSoup(html, "html.parser")
         for card in soup.select("div.tilter"):
-            name_tag = card.find("h3", class_="tilter__title")
-            loc_tag  = card.find("p",  class_="tilter__description")
-            if not (name_tag and loc_tag):
+            title = card.find("h3", class_="tilter__title")
+            desc  = card.find("p",  class_="tilter__description")
+            if not (title and desc):
                 continue
-            nombre = name_tag.get_text(" ", strip=True)
-            ubic   = loc_tag.get_text(" ", strip=True)
 
-            if not any(_norm(c) in _norm(ubic) for c in LOCALIZACIONES_DESEADAS):
+            nombre = title.get_text(" ", strip=True)
+            ubic   = desc.get_text(" ", strip=True)
+
+            # filtrado por localidades deseadas
+            if not any(_norm(city) in _norm(ubic) for city in LOCALIZACIONES_DESEADAS):
                 continue
 
             a = card.find("a", href=True)
