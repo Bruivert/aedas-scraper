@@ -1,19 +1,21 @@
 # scrapers/ficsa.py
 # ───────────────────────────────────────────────────────────────
 """
-Scraper FICSA (dos saltos)
+Scraper FICSA
 
-1) Lista principal → https://www.ficsa.es/promociones/
-   • recopila todos los enlaces /promociones/<slug>/
-2) Ficha individual:
-   • Nombre (h1 / h2)
-   • Localización  (<p class="description"> …)
-   • Precio mínimo (‘Desde XXX €’ dentro de <p class="value">)
-   • Dormitorios   (mínimo antes de la palabra “dormitorio”)
+1) Visita https://www.ficsa.es/promociones/  → recoge todos los enlaces
+   /promociones/<slug>/
+2) En cada ficha extrae:
+      • Nombre (h1 / h2)
+      • Localización  (<p class="description">)
+      • Precio mínimo (primer número tras «Desde» en <p class="value"> del bloque
+                       “RANGO DE PRECIOS”)
+      • Dormitorios   (mínimo antes de “dormitorio”)
 3) Filtra:
-   • ciudad ∈ utils.LOCALIZACIONES_DESEADAS
-   • precio ≤ utils.PRECIO_MAXIMO  (si existe)
-   • dorms  ≥ utils.HABITACIONES_MINIMAS (si existe)
+      • ciudad ∈ utils.LOCALIZACIONES_DESEADAS
+      • precio ≤ utils.PRECIO_MAXIMO  (si existe)
+      • dorms  ≥ utils.HABITACIONES_MINIMAS (si existe)
+4) Devuelve bloques Markdown listos para Telegram.
 """
 
 from __future__ import annotations
@@ -41,20 +43,31 @@ _ciudades = [re.escape(c) for c in LOCALIZACIONES_DESEADAS]
 CIUDADES_RE = re.compile(r"\b(" + "|".join(_ciudades) + r")\b", re.I)
 
 def _extract_price(soup: BeautifulSoup) -> int | None:
-    """Devuelve el primer número después de ‘Desde’."""
-    val_tag = soup.find("p", class_="value") or soup.find(string=re.compile(r"\bdesde\b", re.I))
-    if val_tag:
-        txt = val_tag.get_text() if hasattr(val_tag, "get_text") else val_tag
-        num = re.search(r"\d[\d.]*", html.unescape(txt))
-        if num:
-            return int(num.group(0).replace(".", ""))
-    return None
+    """
+    Devuelve el número tras «Desde» dentro del bloque RANGO DE PRECIOS.
+    """
+    # ① localizar div/p que contenga la palabra "RANGO DE PRECIOS"
+    rango_div = soup.find(
+        lambda tag: tag.name == "div"
+        and "item-promocion" in tag.get("class", [])
+        and "rango de precios" in tag.get_text(" ", strip=True).lower()
+    )
+    if rango_div:
+        value_p = rango_div.find("p", class_="value")
+    else:
+        # Fallback: cualquier <p class="value"> con 'Desde'
+        value_p = soup.find("p", class_="value", string=re.compile(r"\bdesde\b", re.I))
+
+    if not value_p:
+        return None
+
+    match = re.search(r"\d[\d.]*", value_p.get_text())
+    return int(match.group(0).replace(".", "")) if match else None
 
 def _extract_location(soup: BeautifulSoup) -> str:
-    """Texto de <p class="description"> o primeros 300 c. del documento."""
     loc_tag = soup.find("p", class_="description")
     texto = loc_tag.get_text(" ", strip=True) if loc_tag else soup.get_text(" ", strip=True)[:300]
-    return re.sub(r"\s+", " ", texto).strip()
+    return re.sub(r"\s+", " ", html.unescape(texto)).strip()
 
 def _extract_dorms(soup: BeautifulSoup) -> int | None:
     dorm_txt = soup.find(string=re.compile(r"dormitorio", re.I))
@@ -114,7 +127,7 @@ def scrape() -> list[str]:
         if d["dorms"] and d["dorms"] < HABITACIONES_MINIMAS:
             continue
 
-        # Construir mensaje Markdown
+        # Markdown
         lineas = [
             f"*{d['nombre']} (FICSA)*",
             f"📍 {d['ubic'].title() if d['ubic'] else ''}",
