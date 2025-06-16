@@ -1,31 +1,24 @@
 # scrapers/ficsa.py
 # ───────────────────────────────────────────────────────────────
 """
-Scraper FICSA
+Scraper FICSA (dos saltos)
 
-Flujo:
-1. Visita https://www.ficsa.es/promociones/  ➜ recoge todos los enlaces
-   que apuntan a /promociones/<slug>/
-2. Entra en cada ficha y extrae:
-      • Nombre            (h1 / h2)
-      • Localización      (primer texto con “València”, “Mislata”…)
-      • Precio mínimo     (primer “Desde XXX €”, si existe)
-      • Dormitorios       (mínimo antes de la palabra ‘dormitorio’, si existe)
-3. Filtra:
-      • localidad ∈ utils.LOCALIZACIONES_DESEADAS
-      • precio   ≤ utils.PRECIO_MAXIMO        (si existe)
-      • dorms    ≥ utils.HABITACIONES_MINIMAS (si existe)
-4. Devuelve bloques Markdown listos para enviar por Telegram.
+1) Lista principal → https://www.ficsa.es/promociones/
+   • recopila todos los enlaces /promociones/<slug>/
+2) Ficha individual:
+   • Nombre (h1 / h2)
+   • Localización  (<p class="description"> …)
+   • Precio mínimo (‘Desde XXX €’ dentro de <p class="value">)
+   • Dormitorios   (mínimo antes de la palabra “dormitorio”)
+3) Filtra:
+   • ciudad ∈ utils.LOCALIZACIONES_DESEADAS
+   • precio ≤ utils.PRECIO_MAXIMO  (si existe)
+   • dorms  ≥ utils.HABITACIONES_MINIMAS (si existe)
 """
 
 from __future__ import annotations
-import html
-import re
-import time
-import unicodedata
-import requests
+import html, re, time, unicodedata, requests
 from bs4 import BeautifulSoup
-
 from utils import (
     HEADERS,
     LOCALIZACIONES_DESEADAS,
@@ -37,7 +30,6 @@ LIST_URL = "https://www.ficsa.es/promociones/"
 
 # ───────────────────────────── helpers ─────────────────────────
 def _norm(txt: str) -> str:
-    """minúsculas + sin acentos"""
     return (
         unicodedata.normalize("NFKD", txt)
         .encode("ascii", "ignore")
@@ -45,104 +37,93 @@ def _norm(txt: str) -> str:
         .lower()
     )
 
-def _clean_html(raw: str) -> str:
-    """quita etiquetas y entidades HTML"""
-    txt = html.unescape(raw)
-    return re.sub(r"<[^>]+>", " ", txt)
+_ciudades = [re.escape(c) for c in LOCALIZACIONES_DESEADAS]
+CIUDADES_RE = re.compile(r"\b(" + "|".join(_ciudades) + r")\b", re.I)
 
-def _extract_number(txt: str) -> int | None:
-    """primer número de la cadena (con separador de miles opcional)"""
-    m = re.search(r"\d[\d.]*", txt or "")
-    return int(m.group(0).replace(".", "")) if m else None
+def _extract_price(soup: BeautifulSoup) -> int | None:
+    """Devuelve el primer número después de ‘Desde’."""
+    val_tag = soup.find("p", class_="value") or soup.find(string=re.compile(r"\bdesde\b", re.I))
+    if val_tag:
+        txt = val_tag.get_text() if hasattr(val_tag, "get_text") else val_tag
+        num = re.search(r"\d[\d.]*", html.unescape(txt))
+        if num:
+            return int(num.group(0).replace(".", ""))
+    return None
 
-# ───────────────────────────── paso A ──────────────────────────
+def _extract_location(soup: BeautifulSoup) -> str:
+    """Texto de <p class="description"> o primeros 300 c. del documento."""
+    loc_tag = soup.find("p", class_="description")
+    texto = loc_tag.get_text(" ", strip=True) if loc_tag else soup.get_text(" ", strip=True)[:300]
+    return re.sub(r"\s+", " ", texto).strip()
+
+def _extract_dorms(soup: BeautifulSoup) -> int | None:
+    dorm_txt = soup.find(string=re.compile(r"dormitorio", re.I))
+    if dorm_txt:
+        nums = [int(n) for n in re.findall(r"\d+", dorm_txt)]
+        return min(nums) if nums else None
+    return None
+
+# ───────────────────────── paso A: enlaces ─────────────────────
 def _get_promo_links() -> list[str]:
-    """Devuelve todos los enlaces /promociones/<slug>/ únicos."""
     resp = requests.get(LIST_URL, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    links: list[str] = []
+    links = []
     for a in soup.select("a[href*='/promociones/']"):
         href = a["href"]
         if href.endswith("/promociones/"):
-            continue  # descarta el propio listado
+            continue
         abs_url = href if href.startswith("http") else f"https://www.ficsa.es{href}"
         links.append(abs_url)
-    return list(dict.fromkeys(links))  # elimina duplicados
+    return list(dict.fromkeys(links))
 
-# ───────────────────────────── paso B ──────────────────────────
+# ───────────────────────── paso B: ficha ───────────────────────
 def _parse_promotion(url: str) -> dict | None:
-    """Devuelve los datos extraídos de la ficha o None si falla."""
     try:
         html_page = requests.get(url, headers=HEADERS, timeout=30).text
     except requests.RequestException:
         return None
 
-    soup = BeautifulSoup(html_page, "html.parser")
+    soup  = BeautifulSoup(html_page, "html.parser")
+    h_tag = soup.find(["h1", "h2"])
+    nombre = h_tag.get_text(" ", strip=True) if h_tag else None
 
-    # Nombre
-    h = soup.find(["h1", "h2"])
-    nombre = h.get_text(" ", strip=True) if h else None
+    ubic   = _extract_location(soup)
+    precio = _extract_price(soup)
+    dorms  = _extract_dorms(soup)
 
-    # Localización (primer texto con las palabras clave de ciudad)
-    ubic = ""
-    for tag in soup.find_all(string=True):
-        txt = tag.strip()
-        if any(city in _norm(txt) for city in ["valenc", "mislata", "poblet", "paterna", "manises"]):
-            ubic = txt
-            break
+    return {"nombre": nombre, "ubic": ubic, "precio": precio, "dorms": dorms, "url": url}
 
-    # Precio mínimo
-    price_tag = soup.find(string=re.compile(r"\bdesde\s+\d", re.I))
-    precio = _extract_number(price_tag) if price_tag else None
-
-    # Dormitorios mínimos
-    dorm_txt = soup.find(string=re.compile(r"dormitorio", re.I))
-    dormitorios = None
-    if dorm_txt:
-        nums = [int(n) for n in re.findall(r"\d+", dorm_txt)]
-        dormitorios = min(nums) if nums else None
-
-    return {
-        "nombre": nombre,
-        "ubic": ubic,
-        "precio": precio,
-        "dorms": dormitorios,
-        "url": url,
-    }
-
-# ───────────────────────────── scraper ─────────────────────────
+# ───────────────────────── scraper principal ───────────────────
 def scrape() -> list[str]:
     enlaces = _get_promo_links()
-    print(f"[DEBUG] FICSA lista → {len(enlaces)} enlaces", flush=True)
+    print(f"[DEBUG] FICSA enlaces → {len(enlaces)}", flush=True)
 
     mensajes: list[str] = []
     for link in enlaces:
-        datos = _parse_promotion(link)
-        if not datos or not datos["nombre"]:
+        d = _parse_promotion(link)
+        if not d or not d["nombre"]:
             continue
 
-        # 1. Localidad
-        if not any(_norm(ciudad) in _norm(datos["ubic"]) for ciudad in LOCALIZACIONES_DESEADAS):
+        # Filtros
+        if not CIUDADES_RE.search(_norm(d["ubic"])):
             continue
-        # 2. Precio
-        if datos["precio"] and datos["precio"] > PRECIO_MAXIMO:
+        if d["precio"] and d["precio"] > PRECIO_MAXIMO:
             continue
-        # 3. Dormitorios
-        if datos["dorms"] and datos["dorms"] < HABITACIONES_MINIMAS:
+        if d["dorms"] and d["dorms"] < HABITACIONES_MINIMAS:
             continue
 
-        # -------- construir mensaje Markdown --------
+        # Construir mensaje Markdown
         lineas = [
-            f"*{datos['nombre']} (FICSA)*",
-            f"📍 {datos['ubic'].title() if datos['ubic'] else ''}",
+            f"*{d['nombre']} (FICSA)*",
+            f"📍 {d['ubic'].title() if d['ubic'] else ''}",
         ]
-        if datos["precio"]:
-            lineas.append(f"💶 Desde: {datos['precio']:,}€".replace(",", "."))
-        if datos["dorms"]:
-            lineas.append(f"🛏️ Dorms: {datos['dorms']}")
-        lineas.append(f"🔗 [Ver promoción]({datos['url']})")
+        if d["precio"]:
+            lineas.append(f"💶 Desde: {d['precio']:,}€".replace(",", "."))
+        if d["dorms"]:
+            lineas.append(f"🛏️ Dorms: {d['dorms']}")
+        lineas.append(f"🔗 [Ver promoción]({d['url']})")
 
         mensajes.append("\n".join(lineas))
         time.sleep(0.2)
