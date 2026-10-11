@@ -57,6 +57,16 @@ not the framework.
    to run `higgsfield auth login` (interactive OAuth — you cannot run it) and, if needed,
    `higgsfield workspace set <id>`. Confirm credits cover the stills (~N image
    gens) — plus `(2N-1)` video gens if the chain falls back here.
+   **Cloud sessions (Claude Code on the web):** `.claude/hooks/session-start.sh`
+   installs the CLI, but `higgsfield auth login` needs a local browser and can't
+   complete in the container. If `higgsfield workspace list` fails auth there and the
+   Higgsfield MCP connector is attached (`mcp__Higgsfield__*` tools, load them via
+   ToolSearch), use it as the backend instead of the CLI: `balance` for credits,
+   `media_upload` → curl PUT → `media_confirm` for local frames (stills, first/last
+   frames), `generate_image` for stills, `generate_video` with the frames in
+   `medias` for dives and connectors (check the model's start/end-frame roles with
+   `models_explore` first), `jobs_wait` to poll, then `curl` the result URL into the
+   work dir. Same models, prompts and seam method; only the transport changes.
 3. **ffmpeg / ffprobe** on `$PATH` (frame extraction + encoding).
 4. **An image tool** for background knockout if you want floating scenes: PIL
    (`python3 -c "import PIL"`), or `cwebp`/`sips`. Optional — see Step 3.
